@@ -1,0 +1,156 @@
+# ============================================
+# .gitignore — k8s-threat-detection-system
+# Stack: MicroK8s, Falco, Suricata, ELK, Python
+# ============================================
+
+# ---------------------------
+# CREDENTIALS & SECRETS (CRITICAL)
+# ---------------------------
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.truststore
+kubeconfig
+.kube/
+**/secrets/
+**/credentials/
+*.env
+.env.*
+!.env.example
+*token*
+*password*
+*secret*
+
+# ---------------------------
+# Kubernetes
+# ---------------------------
+*.kubeconfig
+kubectl
+helm-charts/*.tgz
+*.helm
+.microk8s/
+
+# ---------------------------
+# Falco
+# ---------------------------
+# Falco runtime output/logs (regulile custom SE comit)
+falco-logs/
+/tmp/falco*
+*.scap
+
+# ---------------------------
+# Suricata
+# ---------------------------
+# Logs și output Suricata (regulile custom SE comit)
+suricata-logs/
+*.pcap
+*.pcapng
+eve.json
+fast.log
+stats.log
+suricata.log
+
+# ---------------------------
+# ELK Stack
+# ---------------------------
+# Elasticsearch data
+elasticsearch/data/
+elasticsearch/logs/
+**/es-data/
+
+# Logstash
+logstash/data/
+logstash/logs/
+*.log
+dead_letter_queue/
+
+# Kibana
+kibana/data/
+kibana/logs/
+
+# ---------------------------
+# Python
+# ---------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ---------------------------
+# Virtual Machines / Vagrant
+# ---------------------------
+.vagrant/
+*.vdi
+*.vmdk
+*.ova
+*.ovf
+*.qcow2
+*.iso
+
+# ---------------------------
+# Editors & IDE
+# ---------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# ---------------------------
+# OS files
+# ---------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------
+# Logs generice
+# ---------------------------
+logs/
+*.log
+*.log.*
+*.log.gz
+
+# ---------------------------
+# Backup & temp files
+# ---------------------------
+*.bak
+*.tmp
+*.temp
+*.orig
+*.old
+*~
+
+# ---------------------------
+# Docker (dacă e cazul)
+# ---------------------------
+.docker/
+docker-compose.override.yml
+
+# ---------------------------
+# Large files
+# ---------------------------
+*.tar.gz
+*.zip
+*.rar
+*.7z
+*.gz
+!dashboards/*.ndjson
