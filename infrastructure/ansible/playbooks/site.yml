@@ -1,0 +1,24 @@
+---
+# =============================================================================
+# PLAYBOOK MASTER — Recreare completă a infrastructurii
+# =============================================================================
+# Ordinea de rulare este importantă:
+#   1. node-4 (ELK Stack) — trebuie să fie UP primul ca să primească date
+#   2. node-2 (Suricata + Filebeat)
+#   3. node-3 (Filebeat)
+#   4. node-1 (Control Plane, Falco, Falco Talon, aplicații)
+#
+# Rulare completă:
+#   ansible-playbook -i inventories/hosts.ini playbooks/site.yml
+#
+# Dry-run (fără modificări):
+#   ansible-playbook -i inventories/hosts.ini playbooks/site.yml --check
+#
+# Doar un nod specific:
+#   ansible-playbook -i inventories/hosts.ini playbooks/node4_monitoring.yml
+# =============================================================================
+
+- import_playbook: node4_monitoring.yml
+- import_playbook: node2_security.yml
+- import_playbook: node3_application.yml
+- import_playbook: node1_control_plane.yml

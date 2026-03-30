@@ -1,0 +1,178 @@
+---
+# =============================================================================
+# PLAYBOOK: node-4 — Monitoring Node (ELK Stack)
+# =============================================================================
+# Configurează:
+#   - Elasticsearch (single-node, fără TLS, heap 4GB)
+#   - Kibana (port 5601)
+#   - Logstash cu pipeline din files/logstash-security.conf
+#     Input: Beats:5044 (Suricata, k8s-apps) + HTTP:5045 (Falco Sidekick)
+#     Output: index security-YYYY.MM.DD
+#
+# Rulare:
+#   ansible-playbook -i inventories/hosts.ini playbooks/node4_monitoring.yml
+# =============================================================================
+
+- name: Configurare Node-4 — Monitoring Node
+  hosts: monitoring_node
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 1: Configurare sistem
+    # -------------------------------------------------------------------------
+
+    - name: Configurare vm.max_map_count pentru Elasticsearch
+      sysctl:
+        name: vm.max_map_count
+        value: "262144"
+        state: present
+        reload: yes
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 2: Instalare ELK Stack
+    # -------------------------------------------------------------------------
+
+    - name: Adăugare cheie GPG Elastic
+      shell: |
+        wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | \
+        gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/elastic-keyring.gpg
+
+    - name: Adăugare repo Elastic
+      copy:
+        dest: /etc/apt/sources.list.d/elastic-8.x.list
+        content: "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main\n"
+
+    - name: Instalare Elasticsearch, Kibana, Logstash
+      apt:
+        name:
+          - elasticsearch
+          - kibana
+          - logstash
+        state: present
+        update_cache: yes
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 3: Configurare Elasticsearch
+    # -------------------------------------------------------------------------
+
+    - name: Configurare elasticsearch.yml
+      copy:
+        dest: /etc/elasticsearch/elasticsearch.yml
+        content: |
+          cluster.name: security-monitoring
+          node.name: node-4
+          path.data: /var/lib/elasticsearch
+          path.logs: /var/log/elasticsearch
+          network.host: 0.0.0.0
+          http.port: 9200
+          discovery.type: single-node
+          xpack.security.enabled: false
+          xpack.security.enrollment.enabled: false
+          xpack.security.http.ssl.enabled: false
+          xpack.security.transport.ssl.enabled: false
+        backup: yes
+
+    - name: Configurare JVM heap Elasticsearch (4GB)
+      copy:
+        dest: /etc/elasticsearch/jvm.options.d/heap.options
+        content: |
+          -Xms4g
+          -Xmx4g
+
+    - name: Activare și pornire Elasticsearch
+      systemd:
+        name: elasticsearch
+        enabled: yes
+        state: started
+
+    - name: Așteptare pornire Elasticsearch
+      wait_for:
+        port: 9200
+        host: localhost
+        timeout: 120
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 4: Configurare Kibana
+    # -------------------------------------------------------------------------
+
+    - name: Configurare kibana.yml
+      copy:
+        dest: /etc/kibana/kibana.yml
+        content: |
+          server.port: 5601
+          server.host: "0.0.0.0"
+          server.name: "security-kibana"
+          elasticsearch.hosts: ["http://localhost:9200"]
+        backup: yes
+
+    - name: Activare și pornire Kibana
+      systemd:
+        name: kibana
+        enabled: yes
+        state: started
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 5: Configurare Logstash
+    # Folosește fișierul exact din files/
+    # -------------------------------------------------------------------------
+
+    - name: Copiere logstash-security.conf
+      copy:
+        src: ../files/logstash-security.conf
+        dest: /etc/logstash/conf.d/security.conf
+        backup: yes
+
+    - name: Activare și pornire Logstash
+      systemd:
+        name: logstash
+        enabled: yes
+        state: started
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 6: Health Checks
+    # -------------------------------------------------------------------------
+
+    - name: "[CHECK] Elasticsearch status"
+      command: systemctl is-active elasticsearch
+      register: es_status
+      changed_when: false
+      failed_when: false
+
+    - name: "[CHECK] Kibana status"
+      command: systemctl is-active kibana
+      register: kibana_status
+      changed_when: false
+      failed_when: false
+
+    - name: "[CHECK] Logstash status"
+      command: systemctl is-active logstash
+      register: logstash_status
+      changed_when: false
+      failed_when: false
+
+    - name: "[CHECK] Cluster health Elasticsearch"
+      uri:
+        url: "http://localhost:9200/_cluster/health"
+        return_content: yes
+      register: es_health
+      failed_when: false
+
+    - name: "[CHECK] Porturi Logstash"
+      command: ss -tlnp
+      register: ports
+      changed_when: false
+
+    - name: "[CHECK] Raport stare node-4"
+      debug:
+        msg:
+          - "Elasticsearch: {{ es_status.stdout | upper }}"
+          - "Kibana:        {{ kibana_status.stdout | upper }}"
+          - "Logstash:      {{ logstash_status.stdout | upper }}"
+          - "Cluster status: {{ es_health.json.status | default('N/A') }}"
+          - "Port 5044 (Beats): {{ 'OPEN ✓' if '5044' in ports.stdout else 'CLOSED ✗' }}"
+          - "Port 5045 (Falco): {{ 'OPEN ✓' if '5045' in ports.stdout else 'CLOSED ✗' }}"

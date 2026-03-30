@@ -1,0 +1,136 @@
+---
+# =============================================================================
+# PLAYBOOK: node-2 — Security Node
+# =============================================================================
+# Configurează:
+#   - Suricata IDS/IPS cu reguli custom (files/suricata-local.rules)
+#     Monitorizează interfața ens3, HOME_NET: 10.11.0.0/16, 10.102.0.0/16
+#   - Filebeat → Logstash:5044 (EVE JSON logs Suricata)
+#
+# Rulare:
+#   ansible-playbook -i inventories/hosts.ini playbooks/node2_security.yml
+# =============================================================================
+
+- name: Configurare Node-2 — Security Node
+  hosts: security_node
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 1: Suricata
+    # -------------------------------------------------------------------------
+
+    - name: Adăugare PPA Suricata stable
+      apt_repository:
+        repo: ppa:oisf/suricata-stable
+        state: present
+        update_cache: yes
+
+    - name: Instalare Suricata
+      apt:
+        name: suricata
+        state: present
+        update_cache: yes
+
+    - name: Configurare suricata.yaml
+      copy:
+        dest: /etc/suricata/suricata.yaml
+        content: |
+          vars:
+            address-groups:
+              HOME_NET: "[10.11.0.0/16,10.102.0.0/16]"
+              EXTERNAL_NET: "!$HOME_NET"
+
+          af-packet:
+            - interface: ens3
+              cluster-id: 99
+              cluster-type: cluster_flow
+              defrag: yes
+        backup: yes
+
+    - name: Copiere reguli custom Suricata
+      copy:
+        src: ../files/suricata-local.rules
+        dest: /etc/suricata/rules/local.rules
+
+    - name: Update reguli Suricata
+      command: suricata-update
+      changed_when: true
+
+    - name: Activare și pornire Suricata
+      systemd:
+        name: suricata
+        enabled: yes
+        state: started
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 2: Filebeat → Logstash
+    # -------------------------------------------------------------------------
+
+    - name: Adăugare cheie GPG Elastic
+      shell: |
+        wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | \
+        gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/elastic-keyring.gpg
+
+    - name: Adăugare repo Elastic
+      copy:
+        dest: /etc/apt/sources.list.d/elastic-8.x.list
+        content: "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main\n"
+
+    - name: Instalare Filebeat
+      apt:
+        name: filebeat
+        state: present
+        update_cache: yes
+
+    - name: Configurare filebeat.yml
+      copy:
+        dest: /etc/filebeat/filebeat.yml
+        content: |
+          filebeat.inputs:
+            - type: log
+              enabled: true
+              paths:
+                - /var/log/suricata/eve.json
+              json.keys_under_root: true
+              json.add_error_key: true
+              fields:
+                log_type: suricata
+                node: node-2
+              fields_under_root: true
+
+          output.logstash:
+            hosts: ["{{ elasticsearch_host }}:{{ logstash_beats_port }}"]
+        backup: yes
+
+    - name: Activare și pornire Filebeat
+      systemd:
+        name: filebeat
+        enabled: yes
+        state: started
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 3: Health Checks
+    # -------------------------------------------------------------------------
+
+    - name: "[CHECK] Suricata status"
+      command: systemctl is-active suricata
+      register: suricata_status
+      changed_when: false
+      failed_when: false
+
+    - name: "[CHECK] Filebeat status"
+      command: systemctl is-active filebeat
+      register: filebeat_status
+      changed_when: false
+      failed_when: false
+
+    - name: "[CHECK] Raport stare node-2"
+      debug:
+        msg:
+          - "Suricata: {{ suricata_status.stdout | upper }}"
+          - "Filebeat: {{ filebeat_status.stdout | upper }}"

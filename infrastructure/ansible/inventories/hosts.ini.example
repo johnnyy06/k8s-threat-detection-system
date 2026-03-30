@@ -1,0 +1,27 @@
+# =============================================================================
+# INVENTAR ANSIBLE - Sistem integrat de detectie amenintari Kubernetes
+# =============================================================================
+# Copiaza acest fisier ca hosts.ini si completeaza cu IP-urile reale:
+#   cp hosts.ini.example hosts.ini
+
+[control_plane]
+node-1 ansible_host=10.x.x.x ansible_user=ubuntu
+
+[security_node]
+node-2 ansible_host=10.x.x.x ansible_user=ubuntu
+
+[application_node]
+node-3 ansible_host=10.x.x.x ansible_user=ubuntu
+
+[monitoring_node]
+node-4 ansible_host=10.x.x.x ansible_user=ubuntu
+
+[all_nodes:children]
+control_plane
+security_node
+application_node
+monitoring_node
+
+[all_nodes:vars]
+ansible_ssh_private_key_file=~/.ssh/id_rsa
+ansible_python_interpreter=/usr/bin/python3

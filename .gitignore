@@ -154,3 +154,9 @@ docker-compose.override.yml
 *.7z
 *.gz
 !dashboards/*.ndjson
+
+# ---------------------------
+# mentionare explicita pentru fișierele de configurare Ansible
+# ---------------------------
+infrastructure/ansible/group_vars/all.yml
+infrastructure/ansible/inventories/hosts.ini

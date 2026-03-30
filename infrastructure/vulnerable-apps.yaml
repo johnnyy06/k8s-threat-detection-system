@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vulnerable-apps
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dvwa
+  namespace: vulnerable-apps
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dvwa
+  template:
+    metadata:
+      labels:
+        app: dvwa
+    spec:
+      nodeSelector:
+        node-role: application
+      containers:
+      - name: dvwa
+        image: vulnerables/web-dvwa
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dvwa
+  namespace: vulnerable-apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: dvwa
+  ports:
+  - port: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: juice-shop
+  namespace: vulnerable-apps
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: juice-shop
+  template:
+    metadata:
+      labels:
+        app: juice-shop
+    spec:
+      nodeSelector:
+        node-role: application
+      containers:
+      - name: juice-shop
+        image: bkimminich/juice-shop
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: juice-shop
+  namespace: vulnerable-apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: juice-shop
+  ports:
+  - port: 3000

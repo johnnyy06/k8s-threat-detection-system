@@ -1,0 +1,26 @@
+# =============================================================================
+# VARIABILE GLOBALE
+# =============================================================================
+# Copiaza acest fisier ca all.yml si completeaza cu valorile reale:
+#   cp all.yml.example all.yml
+
+# Retea
+metallb_range: "10.x.x.200-10.x.x.210"
+
+# IP-uri noduri (retea interna)
+node1_ip: "10.x.x.x"
+node2_ip: "10.x.x.x"
+node3_ip: "10.x.x.x"
+node4_ip: "10.x.x.x"  # Monitoring Node (ELK Stack)
+
+# Porturi
+elasticsearch_host: "10.x.x.x"  # Acelasi cu node4_ip
+elasticsearch_port: 9200
+logstash_beats_port: 5044
+logstash_http_port: 5045
+kibana_port: 5601
+
+# Namespaces Kubernetes
+falco_namespace: "falco"
+falco_talon_namespace: "falco-system"
+vulnerable_apps_namespace: "vulnerable-apps"

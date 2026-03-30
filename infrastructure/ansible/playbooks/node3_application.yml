@@ -1,0 +1,76 @@
+---
+# =============================================================================
+# PLAYBOOK: node-3 — Application Node
+# =============================================================================
+# Configurează:
+#   - Filebeat → Logstash:5044 (loguri containere MicroK8s)
+#
+# Aplicațiile (DVWA, Juice Shop) sunt deployate din node-1 cu
+# nodeSelector: node-role=application și rulează pe acest nod.
+#
+# Rulare:
+#   ansible-playbook -i inventories/hosts.ini playbooks/node3_application.yml
+# =============================================================================
+
+- name: Configurare Node-3 — Application Node
+  hosts: application_node
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 1: Filebeat → Logstash
+    # -------------------------------------------------------------------------
+
+    - name: Adăugare cheie GPG Elastic
+      shell: |
+        wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | \
+        gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/elastic-keyring.gpg
+
+    - name: Adăugare repo Elastic
+      copy:
+        dest: /etc/apt/sources.list.d/elastic-8.x.list
+        content: "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main\n"
+
+    - name: Instalare Filebeat
+      apt:
+        name: filebeat
+        state: present
+        update_cache: yes
+
+    - name: Configurare filebeat.yml
+      copy:
+        dest: /etc/filebeat/filebeat.yml
+        content: |
+          filebeat.inputs:
+            - type: container
+              paths:
+                - /var/snap/microk8s/common/var/log/pods/*/*.log
+
+          output.logstash:
+            hosts: ["{{ elasticsearch_host }}:{{ logstash_beats_port }}"]
+        backup: yes
+
+    - name: Activare și pornire Filebeat
+      systemd:
+        name: filebeat
+        enabled: yes
+        state: started
+
+    # -------------------------------------------------------------------------
+    # SECȚIUNEA 2: Health Checks
+    # -------------------------------------------------------------------------
+
+    - name: "[CHECK] Filebeat status"
+      command: systemctl is-active filebeat
+      register: filebeat_status
+      changed_when: false
+      failed_when: false
+
+    - name: "[CHECK] Raport stare node-3"
+      debug:
+        msg:
+          - "Filebeat: {{ filebeat_status.stdout | upper }}"

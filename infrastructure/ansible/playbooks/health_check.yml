@@ -1,0 +1,124 @@
+---
+# =============================================================================
+# PLAYBOOK: Health Check complet — fără modificări
+# =============================================================================
+# Verifică starea tuturor componentelor.
+# Util pentru diagnostic rapid după un incident sau restart.
+#
+# Rulare:
+#   ansible-playbook -i inventories/hosts.ini playbooks/health_check.yml
+# =============================================================================
+
+- name: Health Check — Node-4 (ELK Stack)
+  hosts: monitoring_node
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Status servicii ELK
+      command: "systemctl is-active {{ item }}"
+      loop: [elasticsearch, kibana, logstash]
+      register: elk_status
+      changed_when: false
+      failed_when: false
+
+    - name: Cluster health Elasticsearch
+      uri:
+        url: "http://localhost:9200/_cluster/health"
+        return_content: yes
+      register: es_health
+      failed_when: false
+
+    - name: Număr documente în security-*
+      uri:
+        url: "http://localhost:9200/security-*/_count"
+        return_content: yes
+      register: doc_count
+      failed_when: false
+
+    - name: Raport node-4
+      debug:
+        msg:
+          - "=== NODE-4 (Monitoring) ==="
+          - "Elasticsearch: {{ elk_status.results[0].stdout | upper }}"
+          - "Kibana:        {{ elk_status.results[1].stdout | upper }}"
+          - "Logstash:      {{ elk_status.results[2].stdout | upper }}"
+          - "Cluster status: {{ es_health.json.status | default('N/A') }}"
+          - "Documente security-*: {{ doc_count.json.count | default('N/A') }}"
+
+- name: Health Check — Node-2 (Security)
+  hosts: security_node
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Status servicii node-2
+      command: "systemctl is-active {{ item }}"
+      loop: [suricata, filebeat]
+      register: node2_status
+      changed_when: false
+      failed_when: false
+
+    - name: Raport node-2
+      debug:
+        msg:
+          - "=== NODE-2 (Security) ==="
+          - "Suricata: {{ node2_status.results[0].stdout | upper }}"
+          - "Filebeat: {{ node2_status.results[1].stdout | upper }}"
+
+- name: Health Check — Node-3 (Application)
+  hosts: application_node
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Status Filebeat node-3
+      command: systemctl is-active filebeat
+      register: filebeat_status
+      changed_when: false
+      failed_when: false
+
+    - name: Raport node-3
+      debug:
+        msg:
+          - "=== NODE-3 (Application) ==="
+          - "Filebeat: {{ filebeat_status.stdout | upper }}"
+
+- name: Health Check — Node-1 (Control Plane)
+  hosts: control_plane
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: Stare noduri Kubernetes
+      command: microk8s kubectl get nodes --no-headers
+      register: k8s_nodes
+      changed_when: false
+      failed_when: false
+
+    - name: Pod-uri Falco
+      command: microk8s kubectl get pods -n falco --no-headers
+      register: falco_pods
+      changed_when: false
+      failed_when: false
+
+    - name: Pod-uri Falco Talon
+      command: microk8s kubectl get pods -n falco-system --no-headers
+      register: talon_pods
+      changed_when: false
+      failed_when: false
+
+    - name: Servicii aplicații vulnerabile
+      command: microk8s kubectl get svc -n vulnerable-apps --no-headers
+      register: vuln_svc
+      changed_when: false
+      failed_when: false
+
+    - name: Raport node-1
+      debug:
+        msg:
+          - "=== NODE-1 (Control Plane) ==="
+          - "Noduri K8s: {{ k8s_nodes.stdout_lines }}"
+          - "Pod-uri Falco: {{ falco_pods.stdout_lines }}"
+          - "Pod-uri Talon: {{ talon_pods.stdout_lines }}"
+          - "Servicii (IP externe): {{ vuln_svc.stdout_lines }}"
