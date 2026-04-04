@@ -1,0 +1,570 @@
+# =============================================================================
+# Custom Falco Rules - K8s Threat Detection System
+# 
+# Aceste reguli custom extind regulile default Falco pentru a acoperi
+# scenariile de atac specifice mediului Kubernetes al proiectului.
+# Se instalează via Helm upgrade cu customRules în values.yaml.
+#
+# Scenarii acoperite:
+#   1. Container Escape Attempt
+#   2. Crypto Mining Detection
+#   3. Reverse Shell Detection
+#   4. Sensitive File Access
+#   5. Network Scanning (complementar Suricata)
+#   6. Privilege Escalation
+#   7. Data Exfiltration
+#   8. Malicious Image / Suspicious Deployment
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# MACRO-URI ȘI LISTE CUSTOM
+# Definesc elemente reutilizabile în regulile de mai jos
+# -----------------------------------------------------------------------------
+
+# Lista namespace-urilor de sistem care sunt excluse din alertare
+- list: k8s_system_namespaces
+  items:
+    - kube-system
+    - kube-public
+    - kube-node-lease
+    - falco
+    - elk
+    - monitoring
+
+# Lista proceselor cunoscute care accesează /etc/shadow legitim
+- list: allowed_shadow_readers
+  items:
+    - su
+    - sudo
+    - sshd
+    - login
+    - passwd
+    - useradd
+    - usermod
+    - chpasswd
+    - groupadd
+
+# Lista binare de mining cryptocurrency cunoscute
+- list: crypto_mining_binaries
+  items:
+    - xmrig
+    - xmr-stak
+    - minerd
+    - minergate
+    - cpuminer
+    - ethminer
+    - cgminer
+    - bfgminer
+    - t-rex
+    - phoenixminer
+    - nbminer
+    - lolminer
+    - gminer
+
+# Lista porturilor comune folosite de mining pools
+- list: crypto_mining_ports
+  items:
+    - 3333
+    - 4444
+    - 5555
+    - 7777
+    - 8888
+    - 9999
+    - 14433
+    - 14444
+    - 45700
+
+# Lista tool-urilor de network scanning
+- list: network_scanning_tools
+  items:
+    - nmap
+    - masscan
+    - zmap
+    - naabu
+    - rustscan
+    - netcat
+    - nc
+    - ncat
+
+# Lista tool-urilor de exfiltrare date
+- list: data_exfil_tools
+  items:
+    - curl
+    - wget
+    - nc
+    - ncat
+    - netcat
+    - scp
+    - sftp
+    - ftp
+    - rclone
+    - rsync
+
+# Macro: container rulează (exclude host processes)
+- macro: custom_container
+  condition: >
+    container.id != host and container.name != ""
+
+# Macro: nu e namespace de sistem
+- macro: not_system_namespace
+  condition: >
+    k8s.ns.name != "" and
+    not k8s.ns.name in (k8s_system_namespaces)
+
+# Macro: proces spawnat de shell
+- macro: spawned_by_shell
+  condition: >
+    proc.pname in (bash, sh, dash, zsh, csh, ksh, fish)
+
+# -----------------------------------------------------------------------------
+# REGULA 1: Container Escape Attempt
+# Scenariul 1 - Detectare tentative de escape din container
+# MITRE ATT&CK: T1611 (Escape to Host)
+# -----------------------------------------------------------------------------
+
+- rule: "K8S_THREAT: Container Escape - Sensitive Mount Access"
+  desc: >
+    Detectează accesul la path-uri sensibile ale hostului din interiorul
+    unui container, indicând o posibilă tentativă de container escape.
+    Include accesul la /proc/sysrq-trigger, Docker socket, și kubelet.
+  condition: >
+    custom_container and
+    (evt.type in (open, openat, openat2)) and
+    (fd.name startswith /proc/sysrq-trigger or
+     fd.name startswith /proc/acpi or
+     fd.name = /var/run/docker.sock or
+     fd.name = /run/containerd/containerd.sock or
+     fd.name startswith /var/lib/kubelet or
+     fd.name startswith /etc/kubernetes)
+  output: >
+    CONTAINER ESCAPE ATTEMPT: Sensitive host path accessed from container
+    (evt_type=%evt.type user=%user.name user_uid=%user.uid
+    process=%proc.name command=%proc.cmdline file=%fd.name
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name)
+  priority: CRITICAL
+  tags:
+    - container_escape
+    - T1611
+    - mitre_privilege_escalation
+    - custom_rule
+    - scenario_01
+  source: syscall
+
+- rule: "K8S_THREAT: Container Escape - Nsenter or Chroot Usage"
+  desc: >
+    Detectează utilizarea nsenter sau chroot din container, tehnici
+    frecvent folosite pentru a evada din namespace-ul containerului.
+  condition: >
+    custom_container and
+    spawned_process and
+    (proc.name in (nsenter, chroot) or
+     (proc.name = unshare and proc.cmdline contains "--mount"))
+  output: >
+    CONTAINER ESCAPE ATTEMPT: Namespace breakout tool detected
+    (tool=%proc.name command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name)
+  priority: CRITICAL
+  tags:
+    - container_escape
+    - T1611
+    - mitre_privilege_escalation
+    - custom_rule
+    - scenario_01
+  source: syscall
+
+# -----------------------------------------------------------------------------
+# REGULA 2: Crypto Mining Detection
+# Scenariul 2 - Detectare activitate de crypto mining
+# MITRE ATT&CK: T1496 (Resource Hijacking)
+# Cross-tool: Se corelează cu Suricata (trafic spre mining pools)
+# -----------------------------------------------------------------------------
+
+- rule: "K8S_THREAT: Crypto Mining Binary Detected"
+  desc: >
+    Detectează executarea de binare cunoscute de crypto mining în
+    containere. Alertă se corelează cu detectarea Suricata a traficului
+    de rețea spre mining pools.
+  condition: >
+    custom_container and
+    spawned_process and
+    proc.name in (crypto_mining_binaries)
+  output: >
+    CRYPTO MINING DETECTED: Known mining binary executed in container
+    (process=%proc.name command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name parent=%proc.pname)
+  priority: CRITICAL
+  tags:
+    - crypto_mining
+    - T1496
+    - mitre_resource_hijacking
+    - cross_tool_suricata
+    - custom_rule
+    - scenario_02
+  source: syscall
+
+- rule: "K8S_THREAT: Crypto Mining Pool Connection"
+  desc: >
+    Detectează conexiuni de rețea din containere spre porturi
+    asociate cu mining pools (stratum protocol).
+  condition: >
+    custom_container and
+    ((evt.type in (connect, sendto)) and
+     (fd.l4proto = tcp) and
+     (fd.rport in (crypto_mining_ports)))
+  output: >
+    CRYPTO MINING NETWORK: Connection to mining pool port detected
+    (connection=%fd.name port=%fd.rport protocol=%fd.l4proto
+    process=%proc.name command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)
+  priority: WARNING
+  tags:
+    - crypto_mining
+    - T1496
+    - mitre_resource_hijacking
+    - cross_tool_suricata
+    - custom_rule
+    - scenario_02
+  source: syscall
+
+# -----------------------------------------------------------------------------
+# REGULA 3: Reverse Shell Detection
+# Scenariul 3 - Detectare reverse shell din containere
+# MITRE ATT&CK: T1059 (Command and Scripting Interpreter)
+# Cross-tool: Se corelează cu Suricata (conexiune outbound suspectă)
+# -----------------------------------------------------------------------------
+
+- rule: "K8S_THREAT: Reverse Shell in Container"
+  desc: >
+    Detectează pattern-uri tipice de reverse shell: un shell (bash/sh)
+    cu file descriptor redirecționat spre un socket de rețea.
+  condition: >
+    custom_container and
+    spawned_process and
+    proc.name in (bash, sh, dash) and
+    (proc.cmdline contains "/dev/tcp" or
+     proc.cmdline contains "bash -i" or
+     proc.cmdline contains "exec 5<>" or
+     proc.cmdline contains "0<&196" or
+     proc.cmdline contains "mkfifo" or
+     proc.cmdline contains "socket" or
+     proc.cmdline contains ".decode(" or
+     (proc.cmdline contains "nc " and proc.cmdline contains " -e") or
+     (proc.cmdline contains "ncat " and proc.cmdline contains " -e") or
+     (proc.cmdline contains "python" and proc.cmdline contains "connect"))
+  output: >
+    REVERSE SHELL DETECTED: Shell with network redirect in container
+    (command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name parent=%proc.pname fd=%fd.name)
+  priority: CRITICAL
+  tags:
+    - reverse_shell
+    - T1059
+    - mitre_execution
+    - cross_tool_suricata
+    - custom_rule
+    - scenario_03
+  source: syscall
+
+- rule: "K8S_THREAT: Netcat Listener in Container"
+  desc: >
+    Detectează pornirea unui listener netcat în container, care poate
+    fi folosit ca bind shell sau pentru exfiltrare de date.
+  condition: >
+    custom_container and
+    spawned_process and
+    proc.name in (nc, ncat, netcat) and
+    (proc.cmdline contains " -l" or proc.cmdline contains " --listen")
+  output: >
+    BIND SHELL / LISTENER: Netcat listener started in container
+    (command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)
+  priority: WARNING
+  tags:
+    - reverse_shell
+    - T1059
+    - mitre_execution
+    - custom_rule
+    - scenario_03
+  source: syscall
+
+# -----------------------------------------------------------------------------
+# REGULA 4: Sensitive File Access
+# Scenariul 4 - Detectare acces la fișiere sensibile
+# MITRE ATT&CK: T1552 (Unsecured Credentials)
+# -----------------------------------------------------------------------------
+
+- rule: "K8S_THREAT: Sensitive File Read in Container"
+  desc: >
+    Detectează citirea fișierelor sensibile din containere, incluzând
+    /etc/shadow, /etc/passwd, chei private SSH, și secrete K8s montate.
+  condition: >
+    custom_container and
+    (evt.type in (open, openat, openat2)) and
+    (evt.is_open_read = true) and
+    (fd.name = /etc/shadow or
+     fd.name = /etc/gshadow or
+     fd.name startswith /etc/ssh/ssh_host_ or
+     fd.name startswith /root/.ssh/ or
+     fd.name startswith /home and fd.name contains /.ssh/id_ or
+     fd.name startswith /var/run/secrets/kubernetes.io or
+     fd.name startswith /run/secrets/kubernetes.io) and
+    not proc.name in (allowed_shadow_readers)
+  output: >
+    SENSITIVE FILE ACCESS: Credentials or secrets read in container
+    (file=%fd.name evt_type=%evt.type user=%user.name
+    process=%proc.name command=%proc.cmdline
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name)
+  priority: WARNING
+  tags:
+    - sensitive_file
+    - T1552
+    - mitre_credential_access
+    - custom_rule
+    - scenario_04
+  source: syscall
+
+- rule: "K8S_THREAT: Kubernetes Secret Access from Pod"
+  desc: >
+    Detectează accesul la token-ul ServiceAccount sau alte secrete
+    Kubernetes montate în pod, de către procese neașteptate.
+  condition: >
+    custom_container and
+    not_system_namespace and
+    (evt.type in (open, openat, openat2)) and
+    (evt.is_open_read = true) and
+    (fd.name startswith /var/run/secrets/kubernetes.io/serviceaccount/token or
+     fd.name startswith /run/secrets/kubernetes.io/serviceaccount/token) and
+    not proc.name in (curl, wget, kubectl)
+  output: >
+    K8S SECRET ACCESS: ServiceAccount token read by unexpected process
+    (file=%fd.name process=%proc.name command=%proc.cmdline
+    user=%user.name container_id=%container.id
+    container_name=%container.name k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name)
+  priority: NOTICE
+  tags:
+    - k8s_secrets
+    - T1552
+    - mitre_credential_access
+    - custom_rule
+    - scenario_04
+  source: syscall
+
+# -----------------------------------------------------------------------------
+# REGULA 5: Network Scanning from Container
+# Scenariul 5 - Detectare network scanning
+# MITRE ATT&CK: T1046 (Network Service Discovery)
+# Cross-tool: Detectare primară prin Suricata, complementar Falco
+# -----------------------------------------------------------------------------
+
+- rule: "K8S_THREAT: Network Scanning Tool in Container"
+  desc: >
+    Detectează executarea de tool-uri de network scanning în containere.
+    Suricata detectează traficul de scanning pe rețea, iar Falco
+    detectează executarea tool-ului — corelarea oferă context complet.
+  condition: >
+    custom_container and
+    spawned_process and
+    proc.name in (network_scanning_tools)
+  output: >
+    NETWORK SCAN: Scanning tool executed in container
+    (tool=%proc.name command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name)
+  priority: WARNING
+  tags:
+    - network_scan
+    - T1046
+    - mitre_discovery
+    - cross_tool_suricata
+    - custom_rule
+    - scenario_05
+  source: syscall
+
+# -----------------------------------------------------------------------------
+# REGULA 6: Privilege Escalation
+# Scenariul 6 - Detectare privilege escalation în containere
+# MITRE ATT&CK: T1548 (Abuse Elevation Control Mechanism)
+# -----------------------------------------------------------------------------
+
+- rule: "K8S_THREAT: Privilege Escalation via Setuid/Setgid"
+  desc: >
+    Detectează modificarea bitului setuid/setgid pe fișiere din
+    containere, tehnică folosită pentru privilege escalation.
+  condition: >
+    custom_container and
+    ((evt.type = chmod and evt.arg.mode contains "S_ISUID") or
+     (evt.type = fchmod and evt.arg.mode contains "S_ISUID") or
+     (evt.type = fchmodat and evt.arg.mode contains "S_ISUID") or
+     (spawned_process and proc.name = chmod and
+      (proc.cmdline contains "+s" or proc.cmdline contains "4755" or
+       proc.cmdline contains "2755" or proc.cmdline contains "6755")))
+  output: >
+    PRIVILEGE ESCALATION: Setuid/setgid bit modified in container
+    (command=%proc.cmdline user=%user.name file=%fd.name
+    container_id=%container.id container_name=%container.name
+    k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)
+  priority: CRITICAL
+  tags:
+    - privilege_escalation
+    - T1548
+    - mitre_privilege_escalation
+    - custom_rule
+    - scenario_06
+  source: syscall
+
+- rule: "K8S_THREAT: Sudo or Su Usage in Container"
+  desc: >
+    Detectează utilizarea sudo sau su în containere — aceste tool-uri
+    nu ar trebui folosite în containere în condiții normale.
+  condition: >
+    custom_container and
+    spawned_process and
+    not_system_namespace and
+    proc.name in (sudo, su) and
+    not proc.pname in (cron, crond)
+  output: >
+    PRIVILEGE ESCALATION: sudo/su used in container
+    (command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name
+    parent=%proc.pname)
+  priority: WARNING
+  tags:
+    - privilege_escalation
+    - T1548
+    - mitre_privilege_escalation
+    - custom_rule
+    - scenario_06
+  source: syscall
+
+# -----------------------------------------------------------------------------
+# REGULA 7: Data Exfiltration
+# Scenariul 7 - Detectare exfiltrare de date din containere
+# MITRE ATT&CK: T1048 (Exfiltration Over Alternative Protocol)
+# Cross-tool: Se corelează cu Suricata (trafic outbound suspect)
+# -----------------------------------------------------------------------------
+
+- rule: "K8S_THREAT: Data Exfiltration - Large Outbound Transfer"
+  desc: >
+    Detectează utilizarea tool-urilor de transfer de date din containere
+    spre destinații externe, posibilă exfiltrare de date.
+  condition: >
+    custom_container and
+    not_system_namespace and
+    spawned_process and
+    proc.name in (data_exfil_tools) and
+    spawned_by_shell
+  output: >
+    DATA EXFILTRATION SUSPECTED: Transfer tool launched from shell
+    (tool=%proc.name command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name parent=%proc.pname)
+  priority: WARNING
+  tags:
+    - data_exfiltration
+    - T1048
+    - mitre_exfiltration
+    - cross_tool_suricata
+    - custom_rule
+    - scenario_07
+  source: syscall
+
+- rule: "K8S_THREAT: DNS Exfiltration Suspicion"
+  desc: >
+    Detectează query-uri DNS neobișnuit de lungi care ar putea indica
+    exfiltrare de date prin DNS tunneling.
+  condition: >
+    custom_container and
+    (evt.type in (sendto, sendmsg)) and
+    fd.l4proto = udp and
+    fd.rport = 53 and
+    evt.buflen.in > 150
+  output: >
+    DNS EXFILTRATION SUSPECTED: Unusually large DNS query from container
+    (process=%proc.name command=%proc.cmdline
+    connection=%fd.name buffer_len=%evt.buflen.in
+    container_id=%container.id container_name=%container.name
+    k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)
+  priority: NOTICE
+  tags:
+    - data_exfiltration
+    - T1048
+    - dns_tunneling
+    - custom_rule
+    - scenario_07
+  source: syscall
+
+# -----------------------------------------------------------------------------
+# REGULA 8: Malicious/Suspicious Activity in Deployment
+# Scenariul 8 - Detectare activitate suspectă post-deployment
+# MITRE ATT&CK: T1610 (Deploy Container)
+# -----------------------------------------------------------------------------
+
+- rule: "K8S_THREAT: Package Manager in Running Container"
+  desc: >
+    Detectează executarea unui package manager (apt, yum, apk) într-un
+    container care rulează deja. Instalarea de pachete la runtime
+    indică fie un container compromis, fie o imagine configurată greșit.
+  condition: >
+    custom_container and
+    spawned_process and
+    not_system_namespace and
+    proc.name in (apt, apt-get, yum, dnf, apk, pip, pip3, npm, gem) and
+    not proc.pname in (entrypoint.sh, start.sh, init.sh, docker-entrypoint)
+  output: >
+    SUSPICIOUS DEPLOYMENT: Package manager run in live container
+    (package_manager=%proc.name command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name)
+  priority: WARNING
+  tags:
+    - malicious_image
+    - T1610
+    - mitre_execution
+    - custom_rule
+    - scenario_08
+  source: syscall
+
+- rule: "K8S_THREAT: Binary Downloaded and Executed"
+  desc: >
+    Detectează pattern-ul download+execute într-un container:
+    un fișier descărcat (curl/wget) urmat de execuție, tipic pentru
+    malware delivery.
+  condition: >
+    custom_container and
+    spawned_process and
+    ((proc.name in (chmod) and proc.cmdline contains "+x" and
+      spawned_by_shell) or
+     (proc.name in (bash, sh) and
+      proc.cmdline contains "/tmp/" and
+      spawned_by_shell))
+  output: >
+    MALWARE DELIVERY SUSPECTED: Downloaded binary made executable
+    (command=%proc.cmdline user=%user.name
+    container_id=%container.id container_name=%container.name
+    image=%container.image.repository k8s_ns=%k8s.ns.name
+    k8s_pod=%k8s.pod.name parent=%proc.pname)
+  priority: CRITICAL
+  tags:
+    - malicious_image
+    - T1610
+    - mitre_execution
+    - custom_rule
+    - scenario_08
+  source: syscall

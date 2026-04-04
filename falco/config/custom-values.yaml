@@ -1,0 +1,12 @@
+driver:
+  kind: modern_ebpf
+falcosidekick:
+  enabled: true
+  config:
+    webhook:
+      address: http://10.11.0.3:5045
+  webui:
+    enabled: true
+customRules:
+  custom-rules.yaml: |-
+    # <tot conținutul din falco/rules/custom-rules.yaml, indentat cu 4 spații>
