@@ -1,6 +1,5 @@
 # =============================================================================
 # Custom Falco Rules - K8s Threat Detection System
-# 
 # Aceste reguli custom extind regulile default Falco pentru a acoperi
 # scenariile de atac specifice mediului Kubernetes al proiectului.
 # Se instalează via Helm upgrade cu customRules în values.yaml.
