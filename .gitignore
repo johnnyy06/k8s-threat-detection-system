@@ -128,11 +128,13 @@ logs/
 *.log
 *.log.*
 *.log.gz
+docs/baseline/pre-cleanup-stats-2026-05-08.json
 
 # ---------------------------
 # Backup & temp files
 # ---------------------------
 *.bak
+*.yaml.bak
 *.tmp
 *.temp
 *.orig

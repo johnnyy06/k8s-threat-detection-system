@@ -77,6 +77,11 @@ customRules:
         - usermod
         - chpasswd
         - groupadd
+        # Package install legitimate readers (descoperit la testarea scenariului 6)
+        - dpkg
+        - dpkg-preconfigu  # truncat la 15 chars de TASK_COMM_LEN
+        - apt
+        - apt-get
 
     - list: crypto_mining_binaries
       items:
@@ -130,14 +135,17 @@ customRules:
         - rclone
         - rsync
 
+    # NOTE (tuning 2026-05-08): plugin container@0.6.3 nu populeaza container.name
+    # si k8s.ns.name pe MicroK8s + containerd. Macro-urile au fost simplificate sa
+    # foloseasca doar container.id (singurul camp populat consistent). Documentat
+    # in Cap 6 - Limitari. Vezi attack-scenarios/04-sensitive-file pentru investigatie.
     - macro: custom_container
       condition: >
-        container.id != host and container.name != ""
+        container.id != host
 
     - macro: not_system_namespace
       condition: >
-        k8s.ns.name != "" and
-        not k8s.ns.name in (k8s_system_namespaces)
+        container.id != host
 
     - macro: spawned_by_shell
       condition: >
@@ -214,7 +222,7 @@ customRules:
       condition: >
         custom_container and
         spawned_process and
-        proc.name in (crypto_mining_binaries)
+        proc.name in (xmrig, xmr-stak, minerd, minergate, cpuminer, ethminer, cgminer, bfgminer, t-rex, phoenixminer, nbminer, lolminer, gminer)
       output: >
         CRYPTO MINING DETECTED: Known mining binary executed in container
         (process=%proc.name command=%proc.cmdline user=%user.name
@@ -314,6 +322,8 @@ customRules:
          (fd.name startswith /home and fd.name contains /.ssh/id_) or
          fd.name startswith /var/run/secrets/kubernetes.io or
          fd.name startswith /run/secrets/kubernetes.io) and
+        not (fd.name startswith /var/run/secrets/kubernetes.io/serviceaccount/token or
+             fd.name startswith /run/secrets/kubernetes.io/serviceaccount/token) and
         not proc.name in (allowed_shadow_readers)
       output: >
         SENSITIVE FILE ACCESS: Credentials or secrets read in container
@@ -335,7 +345,10 @@ customRules:
         (evt.is_open_read = true) and
         (fd.name startswith /var/run/secrets/kubernetes.io/serviceaccount/token or
          fd.name startswith /run/secrets/kubernetes.io/serviceaccount/token) and
-        not proc.name in (apiserver, controller-manager, kube-proxy)
+        not proc.name in (apiserver, controller-manager, kube-proxy,
+                          metrics-server, metrics-sidecar, dashboard,
+                          coredns, calico-node, kube-controller, controller,
+                          speaker, hostpath-provis)
       output: >
         K8S SECRET ACCESS: ServiceAccount token read by unexpected process
         (file=%fd.name process=%proc.name command=%proc.cmdline
@@ -351,7 +364,7 @@ customRules:
       condition: >
         custom_container and
         spawned_process and
-        proc.name in (network_scanning_tools)
+        proc.name in (nmap, masscan, zmap, naabu, rustscan, netcat, nc, ncat)
       output: >
         NETWORK SCAN: Scanning tool executed in container
         (tool=%proc.name command=%proc.cmdline user=%user.name
@@ -412,7 +425,7 @@ customRules:
         custom_container and
         not_system_namespace and
         spawned_process and
-        proc.name in (data_exfil_tools)
+        proc.name in (curl, wget, nc, ncat, netcat, scp, sftp, ftp, rclone, rsync)
       output: >
         DATA EXFILTRATION SUSPECTED: Transfer tool executed in container
         (tool=%proc.name command=%proc.cmdline user=%user.name
