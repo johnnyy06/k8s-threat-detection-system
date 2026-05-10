@@ -34,6 +34,11 @@ falco:
   json_include_output_property: true
   log_stderr: true
   log_syslog: false
+  # Fix descoperit la investigatie scenariu 5: cu "first" (default), Falco oprea
+  # evaluarea la prima regula match pe un eveniment. Default rules (Drop and execute,
+  # Packet socket created etc.) tageau primele si blocau regulile custom K8S_THREAT
+  # care suprapuneau pe execve. Cu "all", toate regulile match firesc - defense in depth.
+  rule_matching: all
 
 falcosidekick:
   enabled: true
@@ -364,6 +369,7 @@ customRules:
       condition: >
         custom_container and
         spawned_process and
+        not_system_namespace and
         proc.name in (nmap, masscan, zmap, naabu, rustscan, netcat, nc, ncat)
       output: >
         NETWORK SCAN: Scanning tool executed in container
