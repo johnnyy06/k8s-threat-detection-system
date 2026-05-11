@@ -1,14 +1,40 @@
 driver:
   kind: modern_ebpf
 
+# Migrat 2026-05-11 de la collectors.containerd/docker (deprecate in chart 8.0.x)
+# la collectors.containerEngine (plugin container@0.6.3 unificat).
+# Adaugat socket-ul MicroK8s (/var/snap/microk8s/common/run/containerd.sock) la
+# engine-urile containerd + cri — chart-ul nu il monteaza implicit (default-urile
+# acopera doar /run/containerd, /run/k3s/... etc.), de aceea metadata k8s (pod/ns/
+# image) era null pe acest cluster. Vezi attack-scenarios/04-sensitive-file.
 collectors:
-  containerd:
+  containerEngine:
     enabled: true
-    socket: /var/snap/microk8s/common/run/containerd.sock
-  docker:
-    enabled: false
-  crio:
-    enabled: false
+    engines:
+      docker:
+        enabled: false
+      podman:
+        enabled: false
+      containerd:
+        enabled: true
+        sockets:
+          - /run/host-containerd/containerd.sock
+          - /run/containerd/containerd.sock
+          - /var/snap/microk8s/common/run/containerd.sock
+      cri:
+        enabled: true
+        sockets:
+          - /run/containerd/containerd.sock
+          - /run/crio/crio.sock
+          - /run/k3s/containerd/containerd.sock
+          - /run/host-containerd/containerd.sock
+          - /var/snap/microk8s/common/run/containerd.sock
+      lxc:
+        enabled: false
+      libvirt_lxc:
+        enabled: false
+      bpm:
+        enabled: false
 
 resources:
   requests:
@@ -87,6 +113,7 @@ customRules:
         - dpkg-preconfigu  # truncat la 15 chars de TASK_COMM_LEN
         - apt
         - apt-get
+        - frontend          # debconf /usr/share/debconf/frontend - citeste /etc/shadow in postinst (descoperit la scenariul 8)
 
     - list: crypto_mining_binaries
       items:
@@ -107,7 +134,9 @@ customRules:
     - list: crypto_mining_ports
       items:
         - 3333
-        - 4444
+        # 4444 scos 2026-05-11 (rev 23): e port-ul default Metasploit pentru reverse
+        # shell, nu un port tipic de mining pool - cauza unei misatribuiri la testarea
+        # scenariului 03 (reverse shell pe localhost:4444 declansa Crypto Mining Pool).
         - 5555
         - 7777
         - 8888
@@ -140,17 +169,22 @@ customRules:
         - rclone
         - rsync
 
-    # NOTE (tuning 2026-05-08): plugin container@0.6.3 nu populeaza container.name
-    # si k8s.ns.name pe MicroK8s + containerd. Macro-urile au fost simplificate sa
-    # foloseasca doar container.id (singurul camp populat consistent). Documentat
-    # in Cap 6 - Limitari. Vezi attack-scenarios/04-sensitive-file pentru investigatie.
+    # NOTE (tuning 2026-05-11, rev 22): enrichment-ul k8s.ns.name / container.name
+    # functioneaza acum (am adaugat socket-ul containerd MicroK8s la collectors.containerEngine,
+    # vezi blocul de sus). Inainte, plugin-ul container@0.6.3 nu se putea conecta la runtime
+    # si toata metadata era null - de aceea macro-urile erau doar 'container.id != host'.
+    # 'custom_container' ramane simplu (orice container, indiferent de namespace).
+    # 'not_system_namespace' filtreaza acum pe namespace REAL, dar FAIL-OPEN: daca un
+    # eveniment nu a fost imbogatit cu k8s.ns.name (poate sa se intample pe unele
+    # syscall-uri de retea), regula tot trage - mai bine un fals-pozitiv decat un fals-negativ.
     - macro: custom_container
       condition: >
         container.id != host
 
     - macro: not_system_namespace
       condition: >
-        container.id != host
+        container.id != host and
+        (k8s.ns.name = "" or not k8s.ns.name in (k8s_system_namespaces))
 
     - macro: spawned_by_shell
       condition: >
@@ -442,18 +476,22 @@ customRules:
       tags: [data_exfiltration, T1048, mitre_exfiltration, cross_tool_suricata, custom_rule, scenario_07]
       source: syscall
 
+    # TUNING iteratia B (scenariu 07): conditia initiala verifica doar
+    # evt.type in (sendto, sendmsg) - nslookup/resolver-ul glibc face connect()
+    # pe socketul UDP (cand i se da un server explicit) + sendmmsg()/write(),
+    # deci regula nu se declansa niciodata. Extins cu connect si sendmmsg.
     - rule: "K8S_THREAT: DNS Exfiltration Suspicion"
       desc: DNS query to external resolver from container.
       condition: >
         custom_container and
         not_system_namespace and
-        (evt.type in (sendto, sendmsg)) and
+        (evt.type = connect or evt.type in (sendto, sendmsg, sendmmsg)) and
         fd.l4proto = udp and
         fd.rport = 53 and
         not fd.rnet in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8")
       output: >
         DNS EXFILTRATION SUSPECTED: DNS query to external resolver from container
-        (process=%proc.name command=%proc.cmdline
+        (evt_type=%evt.type process=%proc.name command=%proc.cmdline
         destination=%fd.rip connection=%fd.name
         container_id=%container.id container_name=%container.name
         k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)

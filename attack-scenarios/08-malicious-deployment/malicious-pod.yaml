@@ -1,0 +1,26 @@
+# Workload "malitios" deployat de un atacator cu acces la K8s API (T1610 - Deploy Container).
+# Privilegiat, hostPID, hostPath / montat la /host -> tot ce poate cere un atacator.
+# Folosit ca tinta pentru pasii 2-5 din scenariul 08 (actiuni post-deployment).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: malicious-pod
+  namespace: attack-target
+  labels:
+    role: malicious-deployment
+spec:
+  hostPID: true
+  containers:
+    - name: payload
+      image: ubuntu:22.04
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: host-root
+          mountPath: /host
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /
+  restartPolicy: Never

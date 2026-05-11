@@ -49,6 +49,14 @@
 - Suricata STREAM alerts indică TCP transport anomalies (scan pattern)
 - Falco custom rule confirmă cauza la process layer
 
+## Re-validare pe helm rev 22 (2026-05-11)
+
+Re-rulat după migrarea la `collectors.containerEngine` (metadata k8s acum populată) + macro `not_system_namespace` upgradeat:
+- **Falco: ~2017 evenimente, identic** — `Network Scanning Tool` ×6, `Data Exfiltration - Transfer Tool` ×3, `Package Manager` ×1, `Contact K8S API Server From Container` ×~1996 (default, port scan al API svc), `Drop and execute new binary` ×6, `Packet socket created` ×5.
+- **`K8S_THREAT: Crypto Mining Pool Connection` NU mai apare** — în runul original avea 1 hit accidental (port ephemeral care match-uia un port de mining); la re-rulare 0. False-pozitivul accidental a dispărut.
+- **Suricata: ~458 alerte** (vs 517 în runul original) — toate anomalii STREAM/HTTP la nivel de transport, în plafonul de variație run-to-run. Majoritatea spre `10.1.217.70` (pod falcosidekick) — efect colateral al celor ~2000 evenimente Falco shipped → volum TCP mare → Suricata STREAM warnings (cascadă de zgomot, observabilă pentru Cap 6).
+- Output-urile Falco au acum `container_name=attacker image=docker.io/library/ubuntu k8s_ns=attack-target k8s_pod=attack-pod`.
+
 ## Cauza descoperită (Cap 6 — Lessons Learned)
 
 Inițial regula `K8S_THREAT: Network Scanning Tool` NU tragea, deși:

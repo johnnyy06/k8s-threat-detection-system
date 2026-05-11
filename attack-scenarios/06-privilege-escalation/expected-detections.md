@@ -31,6 +31,20 @@
 | A (baseline) | reguli K8S_THREAT active după macro fix | 8 | 7 | 1 (dpkg-preconfigu citește /etc/shadow legitim) |
 | B | extinde `allowed_shadow_readers` cu dpkg, dpkg-preconfigu, apt, apt-get | 7 | 7 | 0 |
 
+## Re-validare pe helm rev 22 (2026-05-11)
+
+Re-rulat după migrarea la `collectors.containerEngine` + macro `not_system_namespace` upgradeat — **8 detecții** (vs 7 în runul original):
+
+| Regulă | Priority | Count (rev 22) |
+|---|---|---|
+| `K8S_THREAT: Privilege Escalation via Setuid/Setgid` | Critical | 3 |
+| `K8S_THREAT: Sudo or Su Usage in Container` | Warning | **2** (acum și `su` la pasul 4, nu doar `sudo` la pasul 6) |
+| `K8S_THREAT: Package Manager in Running Container` | Warning | 2 |
+| `Drop and execute new binary in container` (default) | Critical | 1 |
+| **Total** | | **8** |
+
+Diferența +1: la runul original `sudo` (pasul 6) declanșa doar `Drop and execute new binary` (default), iar `Sudo or Su Usage` doar `su` (pasul 4). Acum ambele invocări (`su` + `sudo`) declanșează `Sudo or Su Usage` — îmbunătățire (mai mult coverage). Detection rate rămâne 100%, 0 FP. Output-urile au acum metadata k8s completă (`k8s_ns=attack-target k8s_pod=attack-pod`). _Notă: `apt-get install sudo` la pasul 5 nu mai rulează postinst-ul (sudo deja instalat), deci nu mai apare FP-ul `dpkg-preconfigu` reading `/etc/shadow` — irelevant oricum, e deja în `allowed_shadow_readers`._
+
 ## Discoveries (relevant pentru Cap D și Cap 6)
 
 ### 1. Bonus default-rule descoperită — `Drop and execute new binary in container`

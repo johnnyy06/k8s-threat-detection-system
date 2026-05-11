@@ -1,0 +1,33 @@
+# Pod cu toate primitivele de container escape: privileged, hostPID, hostNetwork,
+# hostPath / montat la /host, socket-ul containerd MicroK8s montat la /run/containerd/containerd.sock.
+# Simuleaza un pod compromis cu o configuratie de securitate gresita (T1611 - Escape to Host).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: escape-pod
+  namespace: attack-target
+  labels:
+    role: container-escape
+spec:
+  hostPID: true
+  hostNetwork: true
+  containers:
+    - name: escaper
+      image: ubuntu:22.04
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: host-root
+          mountPath: /host
+        - name: containerd-sock
+          mountPath: /run/containerd/containerd.sock
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /
+    - name: containerd-sock
+      hostPath:
+        path: /var/snap/microk8s/common/run/containerd.sock
+        type: Socket
+  restartPolicy: Never
