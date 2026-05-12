@@ -162,3 +162,5 @@ docker-compose.override.yml
 # ---------------------------
 infrastructure/ansible/group_vars/all.yml
 infrastructure/ansible/inventories/hosts.ini
+
+CLAUDE.md
