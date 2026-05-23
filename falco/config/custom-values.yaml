@@ -72,7 +72,7 @@ falcosidekick:
     webhook:
       address: http://10.11.0.3:5045
   webui:
-    enabled: true
+    enabled: false
 
 customRules:
   custom-rules.yaml: |-

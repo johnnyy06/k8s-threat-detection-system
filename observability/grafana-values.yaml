@@ -1,0 +1,31 @@
+# Grafana standalone (grafana/grafana)
+# Install minimal pentru clusterul cu bottleneck de disk I/O.
+
+# Persistenta pentru DB (dashboards, useri) - supravietuieste restart-urilor
+persistence:
+  enabled: true
+  storageClassName: microk8s-hostpath
+  size: 5Gi
+
+# Datasource Prometheus pre-cablat (serviciul instalat la pasul 2)
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-server.observability.svc.cluster.local
+        access: proxy
+        isDefault: true
+
+# WAL mode pentru SQLite - fix pentru "database is locked" pe disk lent.
+# Write-Ahead Logging: cititorii nu blocheaza scriitorii, scrieri batch-uite.
+grafana.ini:
+  database:
+    wal: true
+
+# Init container init-chown-data dezactivat: fisierele sunt deja 472:472
+# (UID-ul Grafanei) din install-ul anterior, chown-ul ar fi redundant si pica
+# pe permisiuni cand subdirectoare runtime (csv/pdf/png) exista deja.
+initChownData:
+  enabled: false

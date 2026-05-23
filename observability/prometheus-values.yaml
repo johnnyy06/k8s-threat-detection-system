@@ -1,0 +1,25 @@
+# Prometheus standalone (prometheus-community/prometheus)
+# Slim install pentru clusterul cu bottleneck de disk I/O:
+# fara operator, fara CRDs, fara alertmanager/pushgateway.
+
+alertmanager:
+  enabled: false
+
+prometheus-pushgateway:
+  enabled: false
+
+# Prometheus server: persistenta + retention 10 zile
+server:
+  retention: "10d"
+  persistentVolume:
+    enabled: true
+    storageClass: microk8s-hostpath
+    size: 20Gi
+
+# node-exporter ramane activ (DaemonSet) - sursa metricilor de noduri (CPU/RAM/disk)
+prometheus-node-exporter:
+  enabled: true
+
+# kube-state-metrics ramane activ - metrici despre obiectele K8s
+kube-state-metrics:
+  enabled: true
