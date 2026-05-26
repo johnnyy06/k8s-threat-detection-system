@@ -1,0 +1,22 @@
+# =============================================================================
+# local-values.yaml.example — Falco Helm values override (deployment-specific)
+# =============================================================================
+# Copiază în local-values.yaml (gitignored) și înlocuiește cu valorile reale:
+#   cp local-values.yaml.example local-values.yaml
+#
+# La helm upgrade folosește AMBELE values files (custom-values.yaml + local-values.yaml):
+#   helm upgrade falco falcosecurity/falco -n falco --version 8.0.2 \
+#     -f custom-values.yaml -f local-values.yaml
+#
+# Helm aplică values în ordine, deci local-values.yaml suprascrie sau adaugă
+# peste custom-values.yaml. Această separare ține endpoint-urile interne
+# (IP-uri, hostnames) afară din git public.
+# =============================================================================
+
+falcosidekick:
+  config:
+    webhook:
+      # Logstash HTTP input endpoint (port 5045) pe nodul care rulează ELK.
+      # Format: http://<NODE_IP>:5045
+      # Pentru cluster-ul curent, e IP-ul intern al lui node-4 (ELK systemd).
+      address: http://CHANGE_ME_LOGSTASH_HOST:5045

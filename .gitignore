@@ -26,6 +26,11 @@ kubeconfig
 *password*
 *secret*
 
+# Local values files (deployment-specific endpoints, internal IPs).
+# Pattern: local-values.yaml overrides committed *-values.yaml at helm upgrade.
+**/local-values.yaml
+!**/local-values.yaml.example
+
 # ---------------------------
 # Kubernetes
 # ---------------------------

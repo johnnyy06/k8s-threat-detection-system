@@ -67,17 +67,19 @@ ansible-playbook -i inventories/hosts.ini playbooks/site.yml --check
 
 ## Acces servicii prin SSH tunnel
 
+IP-urile reale ale nodurilor și ale serviciilor LoadBalancer sunt în `inventories/hosts.ini` (gitignored). Înlocuiește placeholder-urile de mai jos cu valorile tale din `hosts.ini` și din `kubectl get svc -n vulnerable-apps`.
+
 ```bash
-# Kibana
-ssh -L 5601:localhost:5601 ubuntu@10.102.14.31
+# Kibana (ELK pe node-4)
+ssh -L 5601:localhost:5601 ubuntu@<NODE4_FLOATING_IP>
 # → http://localhost:5601
 
-# DVWA
-ssh -L 8080:10.11.0.200:80 ubuntu@10.102.11.79
+# DVWA (LoadBalancer service)
+ssh -L 8080:<DVWA_LB_IP>:80 ubuntu@<JUMP_HOST>
 # → http://localhost:8080
 
-# Juice Shop
-ssh -L 8081:10.11.0.201:3000 ubuntu@10.102.11.79
+# Juice Shop (LoadBalancer service)
+ssh -L 8081:<JUICE_SHOP_LB_IP>:3000 ubuntu@<JUMP_HOST>
 # → http://localhost:8081
 ```
 

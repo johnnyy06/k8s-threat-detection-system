@@ -68,9 +68,12 @@ falco:
 
 falcosidekick:
   enabled: true
-  config:
-    webhook:
-      address: http://10.11.0.3:5045
+  # NOTE: webhook.address (Logstash endpoint URL) NU e setat aici intentionat —
+  # e definit în falco/config/local-values.yaml (gitignored) ca să nu commit-uim
+  # IP-ul intern al cluster-ului. La helm upgrade folosește AMBELE values files:
+  #   helm upgrade falco falcosecurity/falco -n falco --version 8.0.2 \
+  #     -f custom-values.yaml -f local-values.yaml
+  # Vezi local-values.yaml.example pentru template.
   webui:
     enabled: false
 

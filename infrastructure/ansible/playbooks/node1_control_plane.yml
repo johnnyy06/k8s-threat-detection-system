@@ -132,7 +132,8 @@
 
     # -------------------------------------------------------------------------
     # SECȚIUNEA 5: Deploy aplicații vulnerabile
-    # DVWA → 10.11.0.200:80 | Juice Shop → 10.11.0.201:3000
+    # DVWA + Juice Shop expuse prin MetalLB (LoadBalancer IPs alocate din pool;
+    # IP-urile reale sunt vizibile cu: kubectl get svc -n vulnerable-apps)
     # -------------------------------------------------------------------------
 
     - name: Copiere vulnerable-apps.yaml pe node-1
