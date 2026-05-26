@@ -114,6 +114,5 @@ Arhivarea de date colectate (T1560) trece complet neobservată — `tar`/`gzip`/
 # prerequisite o singură dată:
 kubectl exec -n attack-target attack-pod -- bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl wget dnsutils'
 
-cd /home/tionu/Proiect_licenta/k8s-threat-detection-system/attack-scenarios/07-data-exfiltration
 ./attack.sh
 ```
