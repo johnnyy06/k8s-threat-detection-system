@@ -126,9 +126,25 @@ Notes: scenario 1 (deploying the privileged pod) and scenario 8 (deploying the m
 
 **Future directions (not in scope of the thesis; mentioned in the conclusions chapter):** AI/ML-assisted detection (anomaly detection, false-positive reduction), Zero Trust.
 
+## Setup (first-time)
+
+Cluster endpoints (Kibana, Elasticsearch) and Kibana data view IDs are read from `.env` at repo root — gitignored to keep internal IPs and identifiers out of public history.
+
+```bash
+cp .env.example .env
+# Edit .env with your actual cluster endpoints and data view UUIDs
+```
+
+Required variables (see `.env.example` for the full list with comments):
+- `KIBANA_URL` — used by `dashboards/*/build.py`
+- `ES_URL` — used by `attack-scenarios/*/attack.sh`
+- `KIBANA_DATA_VIEW_ID`, `KIBANA_DATA_VIEW_ECS_ID` — UUIDs of the two data views the dashboards reference
+
+The loaders are at `dashboards/_config.py` (Python) and `attack-scenarios/_env.sh` (bash). Both error out with clear instructions if `.env` is missing or has placeholder values.
+
 ## Working with this repo
 
-`kubectl`/`helm` are run from the laptop with a pre-configured kubeconfig. The cluster's internal `10.11.0.x` IPs are not routable from the laptop — reach Elasticsearch/Kibana via the node-4 floating IP `10.102.14.31` (`:9200` ES, `:5601` Kibana). After editing `falco/config/custom-values.yaml`, `helm upgrade falco falcosecurity/falco -n falco --version 8.0.2 -f custom-values.yaml` and wait for the DaemonSet rollout (slow — ~5-15 min; the eBPF driver is rebuilt per pod on this disk). Custom Falco rules live in the `customRules:` block of `custom-values.yaml`, **not** in `falco/rules/custom-rules.yaml` (that copy is stale). See `CLAUDE.md` for the full command set and gotchas.
+`kubectl`/`helm` are run from the laptop with a pre-configured kubeconfig. The cluster's internal `10.11.0.x` IPs are not routable from the laptop — reach Elasticsearch/Kibana via the node-4 floating IP (set in `.env`). After editing `falco/config/custom-values.yaml`, `helm upgrade falco falcosecurity/falco -n falco --version 8.0.2 -f custom-values.yaml` and wait for the DaemonSet rollout (slow — ~5-15 min; the eBPF driver is rebuilt per pod on this disk). Custom Falco rules live in the `customRules:` block of `custom-values.yaml`, **not** in `falco/rules/custom-rules.yaml` (that copy is stale). See `CLAUDE.md` for the full command set and gotchas.
 
 ## License
 

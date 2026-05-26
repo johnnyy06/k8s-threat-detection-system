@@ -8,7 +8,7 @@ set -e
 
 POD=attack-pod
 NS=attack-target
-ES=http://10.102.14.31:9200
+source "$(dirname "$0")/../_env.sh"
 
 # Endpoint-uri externe (benign echo / DNS public)
 HTTP_ECHO=httpbin.org          # /post echo, suporta HTTP si HTTPS
@@ -89,27 +89,27 @@ echo ""
 echo "=== Reguli FALCO declansate de la $START_TS ==="
 curl -s "$ES/security-*/_search?size=0" \
   -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"aggs\":{\"by_rule\":{\"terms\":{\"field\":\"rule.keyword\",\"size\":20}},\"by_priority\":{\"terms\":{\"field\":\"priority.keyword\",\"size\":10}}}}" \
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"aggs\":{\"by_rule\":{\"terms\":{\"field\":\"rule.name\",\"size\":20}},\"by_priority\":{\"terms\":{\"field\":\"log.level\",\"size\":10}}}}" \
   | python3 -m json.tool | sed -n '/aggregations/,$p'
 
 echo ""
 echo "=== Alertele SURICATA declansate ==="
 curl -s "$ES/security-*/_search?size=0" \
   -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"suricata\"}},{\"term\":{\"event_type.keyword\":\"alert\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"aggs\":{\"by_signature\":{\"terms\":{\"field\":\"alert.signature.keyword\",\"size\":25}},\"by_category\":{\"terms\":{\"field\":\"alert.category.keyword\",\"size\":15}},\"by_dest\":{\"terms\":{\"field\":\"dest_ip.keyword\",\"size\":15}}}}" \
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"suricata\"}},{\"term\":{\"event_type.keyword\":\"alert\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"aggs\":{\"by_signature\":{\"terms\":{\"field\":\"rule.name\",\"size\":25}},\"by_category\":{\"terms\":{\"field\":\"alert.category.keyword\",\"size\":15}},\"by_dest\":{\"terms\":{\"field\":\"destination.ip\",\"size\":15}}}}" \
   | python3 -m json.tool | sed -n '/aggregations/,$p'
 
 echo ""
 echo "=== Sample 10 detectii Falco (cronologic) ==="
 curl -s "$ES/security-*/_search?size=10" \
   -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"sort\":[{\"@timestamp\":\"asc\"}],\"_source\":[\"@timestamp\",\"rule\",\"priority\",\"output\"]}" \
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"sort\":[{\"@timestamp\":\"asc\"}],\"_source\":[\"@timestamp\",\"rule.name\",\"log.level\",\"output\"]}" \
   | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 for h in d.get('hits',{}).get('hits',[]):
     s = h['_source']
-    print(f\"  {s.get('@timestamp','?')[:19]} [{s.get('priority','?'):8}] {s.get('rule','?')}\")
+    print(f\"  {s.get('@timestamp','?')[:19]} [{s.get('log',{}).get('level','?'):8}] {s.get('rule',{}).get('name','?')}\")
     out = s.get('output','')
     if out:
         print(f\"    -> {out[:200]}\")
@@ -118,11 +118,11 @@ for h in d.get('hits',{}).get('hits',[]):
 echo ""
 echo -n "Total Falco events: "
 curl -s "$ES/security-*/_count" -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}"
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}"
 echo ""
 echo -n "Total Suricata alerts: "
 curl -s "$ES/security-*/_count" -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"suricata\"}},{\"term\":{\"event_type.keyword\":\"alert\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}"
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"suricata\"}},{\"term\":{\"event_type.keyword\":\"alert\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}"
 echo ""
 
 echo ""

@@ -6,7 +6,7 @@ set -e
 
 POD=attack-pod
 NS=attack-target
-ES=http://10.102.14.31:9200
+source "$(dirname "$0")/../_env.sh"
 
 # Targets verificate la 2026-05-08
 K8S_API=10.152.183.1
@@ -52,25 +52,25 @@ echo ""
 echo "=== Reguli FALCO declansate de la $START_TS ==="
 curl -s "$ES/security-*/_search?size=0" \
   -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"aggs\":{\"by_rule\":{\"terms\":{\"field\":\"rule.keyword\",\"size\":15}},\"by_priority\":{\"terms\":{\"field\":\"priority.keyword\",\"size\":10}}}}" \
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"aggs\":{\"by_rule\":{\"terms\":{\"field\":\"rule.name\",\"size\":15}},\"by_priority\":{\"terms\":{\"field\":\"log.level\",\"size\":10}}}}" \
   | python3 -m json.tool | sed -n '/aggregations/,$p'
 
 echo ""
 echo "=== Alertele SURICATA declansate ==="
 curl -s "$ES/security-*/_search?size=0" \
   -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"suricata\"}},{\"term\":{\"event_type.keyword\":\"alert\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"aggs\":{\"by_signature\":{\"terms\":{\"field\":\"alert.signature.keyword\",\"size\":20}},\"by_severity\":{\"terms\":{\"field\":\"alert.severity\",\"size\":10}},\"by_dest\":{\"terms\":{\"field\":\"dest_ip.keyword\",\"size\":10}}}}" \
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"suricata\"}},{\"term\":{\"event_type.keyword\":\"alert\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}},\"aggs\":{\"by_signature\":{\"terms\":{\"field\":\"rule.name\",\"size\":20}},\"by_severity\":{\"terms\":{\"field\":\"alert.severity\",\"size\":10}},\"by_dest\":{\"terms\":{\"field\":\"destination.ip\",\"size\":10}}}}" \
   | python3 -m json.tool | sed -n '/aggregations/,$p'
 
 echo ""
 echo "=== Total events (orice tag) cumulate de la atacator (10.1.217.86) ==="
 echo -n "Falco events: "
 curl -s "$ES/security-*/_count" -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}" 2>&1
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}" 2>&1
 echo ""
 echo -n "Suricata events: "
 curl -s "$ES/security-*/_count" -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags.keyword\":\"suricata\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}" 2>&1
+  -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"suricata\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}" 2>&1
 echo ""
 
 echo ""
