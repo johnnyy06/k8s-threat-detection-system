@@ -44,18 +44,26 @@ for (def t : doc["tags"]) {
 
 Toate panel-urile au filtrul implicit `tags : scenario_*` astfel încât în mod "no selection" se văd toate scenariile cumulat, NU toate evenimentele (inclusiv background).
 
-## Scenariile disponibile (din tag-uri Falco custom)
+## Scenariile disponibile (11 total — tag-uri scenario_NN)
 
-| Scenario | Tag | Detecții (preview Last 7d) | Top rule expected |
+Scenariile 01-08 au tag-uri puse direct de regulile Falco custom K8S_THREAT.
+Scenariile 09-11 NU au reguli custom dedicate — tag-urile sunt inferate de
+Logstash (Stage 4) pe baza unor amprente: pod name pattern pentru 09/10,
+respectiv `command_line: *Authorization*Bearer*` pentru 11.
+
+| Scenario | Tag | Discriminator | Top rule / signature |
 |---|---|---|---|
-| 01 Container Escape | `scenario_01` | 11 | Container Escape - Nsenter/Chroot, Sensitive Mount Access |
-| 02 Crypto Mining | `scenario_02` | 47 | Crypto Mining Binary, Pool Connection |
-| 03 Reverse Shell | `scenario_03` | 14 | Reverse Shell Command Pattern, Netcat Listener |
-| 04 Sensitive File | `scenario_04` | 90,000+ | Sensitive File Read, K8S Secret Access (dominat de FP-uri Prometheus) |
-| 05 Network Scanning | `scenario_05` | 13 | Network Scanning Tool |
-| 06 Privilege Escalation | `scenario_06` | 5 | Privilege Escalation Setuid/Setgid, Sudo Usage |
-| 07 Data Exfiltration | `scenario_07` | 46 | DNS Exfiltration Suspicion, Transfer Tool |
-| 08 Malicious Deployment | `scenario_08` | 11 | Binary Downloaded&Executed, Package Manager |
+| 01 Container Escape | `scenario_01` | regulă Falco custom | Container Escape - Nsenter/Chroot, Sensitive Mount Access |
+| 02 Crypto Mining | `scenario_02` | regulă Falco custom | Crypto Mining Binary, Pool Connection |
+| 03 Reverse Shell | `scenario_03` | regulă Falco custom | Reverse Shell Command Pattern, Netcat Listener |
+| 04 Sensitive File | `scenario_04` | regulă Falco custom | Sensitive File Read, K8S Secret Access (dominat de FP-uri Prometheus) |
+| 05 Network Scanning | `scenario_05` | regulă Falco custom | Network Scanning Tool |
+| 06 Privilege Escalation | `scenario_06` | regulă Falco custom | Privilege Escalation Setuid/Setgid, Sudo Usage |
+| 07 Data Exfiltration | `scenario_07` | regulă Falco custom | DNS Exfiltration Suspicion, Transfer Tool |
+| 08 Malicious Deployment | `scenario_08` | regulă Falco custom | Binary Downloaded&Executed, Package Manager |
+| 09 OWASP ZAP | `scenario_09` | Logstash: pod name `zap-scan-*` | semnături Suricata ET WEB / SCAN |
+| 10 kube-hunter | `scenario_10` | Logstash: pod name `kube-hunter-*` | Network Service Discovery + K8s API access |
+| 11 Lateral Movement | `scenario_11` | Logstash: cmdline `Authorization*Bearer` | Contact K8S API Server From Container (cu SA token) |
 
 ## Cum se rulează un scenariu (pentru a popula dashboard-ul cu date noi)
 
@@ -87,7 +95,7 @@ Scriptul rulează:
 
 ## Lessons & gotchas
 
-1. **Options List Control pe câmp generic**: prima versiune a folosit Options List pe câmpul `tags` direct. Dropdown afișa TOATE tag-urile (T1552, falco, custom_rule, mitre_*, scenario_*, etc.) — zeci de opțiuni. Soluție: runtime field `scenario` care extrage doar `scenario_*` din array-ul tags. Dropdown afișează acum doar 8 opțiuni.
+1. **Options List Control pe câmp generic**: prima versiune a folosit Options List pe câmpul `tags` direct. Dropdown afișa TOATE tag-urile (T1552, falco, custom_rule, mitre_*, scenario_*, etc.) — zeci de opțiuni. Soluție: runtime field `scenario` care extrage doar `scenario_*` din array-ul tags. Dropdown afișează acum doar cele 11 scenarii.
 
 2. **Controls și data view consistency**: dacă controlul filtrează pe `scenario` (runtime field în data view A), panel-urile filtrate trebuie să folosească același data view A. Prima versiune avea controlul pe security-ecs și panel-urile pe security-*. Filtrul aplicat de control nu propaga la panel-uri (silent fail — fără date filtrare). Fix: schimbat TOATE panel-urile la security-ecs.
 
@@ -101,7 +109,10 @@ Scriptul rulează:
 
 Director: [`screenshots/`](screenshots/)
 
-- `per-scenario-control-open.png` — dropdown deschis cu 8 scenarii vizibile
+- `per-scenario-control-open.png` — dropdown deschis cu cele 11 scenarii vizibile
 - `per-scenario-04-selected.png` — scenario_04 selectat (dominat de Sensitive File Read)
 - `per-scenario-03-reverse-shell.png` — scenario_03 selectat (vezi reverse shell + netcat patterns)
+- `per-scenario-09-zap.png` — scenario_09 selectat (ZAP DAST scan, Suricata-driven)
+- `per-scenario-10-kube-hunter.png` — scenario_10 selectat (kube-hunter recon)
+- `per-scenario-11-lateral-movement.png` — scenario_11 selectat (Bearer token reuse pivot)
 - `per-scenario-event-stream-detail.png` — event stream pentru un scenariu specific

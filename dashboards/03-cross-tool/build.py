@@ -6,9 +6,11 @@ asupra aceluiași index unificat security-* prin câmpuri ECS canonice.
 
 Narativ central (vezi datele preview):
   - Falco rulează ca DaemonSet pe TOATE nodurile (node-1..node-4)
-  - Suricata rulează ca systemd DOAR pe node-2
-  - => node-2 e SINGURUL nod cu vizibilitate cross-tool real
-  - => panelul "Events per host × tool" arată asta vizual stark
+  - Suricata rulează ca systemd pe node-2 + node-3 (nodurile cu workloads
+    vulnerabile / aplicații expuse — sensor-near-target placement)
+  - => node-2 + node-3 au vizibilitate cross-tool real (Falco + Suricata)
+  - => node-1 (control plane) + node-4 (ELK) sunt Falco-only
+  - => panelul "Events per host × tool" arată asta vizual
 
 10 panels:
   1. KPI Total events
@@ -373,7 +375,7 @@ PANELS = [
 
     # Row 2: KEY panel — events per host × tool (y=20..34) + top destinations side
     ("per-host-tool", "stacked_bar", "lens",
-        {"title": "Events per host × tool (node-2 = singurul nod cross-tool)",
+        {"title": "Events per host × tool (node-2 + node-3 = cross-tool real)",
          "group_field": "observer.hostname",
          "split_field": "observer.product",
          "group_size": 10, "split_size": 2,
@@ -465,8 +467,9 @@ def build_dashboard():
             "description": ("Demonstrează valoarea arhitecturii defense-in-depth: "
                             "Falco (runtime/syscall) + Suricata (network IDS) corelate "
                             "pe indexul unificat security-* prin câmpuri ECS canonice. "
-                            "Insight cheie: node-2 este singurul nod cu vizibilitate cross-tool real "
-                            "(Suricata systemd doar pe node-2, Falco DaemonSet pe toate nodurile)."),
+                            "Insight cheie: node-2 + node-3 au vizibilitate cross-tool real "
+                            "(Suricata systemd pe nodurile cu workloads vulnerabile — "
+                            "sensor-near-target placement; Falco DaemonSet pe toate nodurile)."),
             "panelsJSON": json.dumps(panels_meta),
             "optionsJSON": json.dumps({
                 "useMargins": True, "syncColors": False, "syncCursor": True,

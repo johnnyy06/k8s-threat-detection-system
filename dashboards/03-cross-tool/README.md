@@ -4,7 +4,7 @@
 
 "Cum se completează Falco și Suricata reciproc?" — justifică direct alegerea arhitecturală **defense-in-depth** a sistemului (2 tool-uri ≠ duplicare, ci complementaritate). Demonstrează că Falco vede runtime/syscalls și Suricata vede network packets — aceeași infrastructură văzută din 2 unghiuri distincte.
 
-**Insight cheie:** node-2 e singurul nod cu vizibilitate cross-tool real, pentru că Suricata rulează ca systemd doar pe node-2, în timp ce Falco rulează ca DaemonSet pe toate cele 4 noduri.
+**Insight cheie:** **node-2 și node-3** au vizibilitate cross-tool real (Falco + Suricata), pentru că Suricata rulează ca systemd doar pe cele două noduri cu workloads vulnerabile / aplicații expuse (*sensor-near-target placement*). Falco DaemonSet rulează pe toate cele 4 noduri. node-1 (control plane) și node-4 (ELK) sunt Falco-only.
 
 ## URL & data view
 
@@ -31,9 +31,9 @@
 ## Key insights (narativ pentru defense)
 
 - **Panel 6 (Events per host × tool)** este vedeta:
-  - `node-2`: bar cu 2 culori (Falco ~12 + Suricata ~44k) — singura locație cu cross-tool real
-  - `node-1`, `node-3`, `node-4`: doar Falco bar — pe acestea Suricata e blind
-  - Demonstrează vizual realitatea arhitecturală a sistemului
+  - `node-2` și `node-3`: bar-uri cu 2 culori (Falco + Suricata) — nodurile cu *sensor-near-target* placement (Suricata systemd urmărește traficul interfeței de rețea a nodului care găzduiește workloads vulnerabile)
+  - `node-1` (control plane) și `node-4` (ELK): doar Falco bar — fără workloads vulnerabile, nu necesită Suricata sensor
+  - Demonstrează vizual decizia arhitecturală: sensors apropiate de assets, nu pe toate nodurile uniform
 - **Cross-tool timeline overlay**: ambele tool-uri văd cluster-ul SIMULTAN, dar pe layere diferite. Suricata domină volumetric (flow telemetry), Falco e mai sparse dar punctual când fire rules.
 - **Combined event stream**: pe fiecare rând vezi `observer.product` (Falco / Suricata) + câmpurile specifice. Falco events au `kubernetes.pod.name` și `process.name`; Suricata events au `source.ip`, `destination.ip`. Demonstrează cele 2 vederi complementare side-by-side.
 - **Per-namespace (Falco only)**: Suricata nu populează `kubernetes.namespace` (e blind la K8s context). Demonstrează vizual limitarea structurală — pentru K8s-aware investigation, Falco e necesar; pentru network-level visibility, Suricata.
