@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kube-hunter
+  namespace: attack-target
+  labels:
+    role: attack-source
+    scenario: "10-kube-hunter"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        role: attack-source
+        scenario: "10-kube-hunter"
+    spec:
+      # node-4 (alaturi de attack-pod) - departe de dqlite (node-1) si de DVWA (node-3).
+      # Falco e DaemonSet pe toate nodurile, deci detecteaza indiferent de plasare.
+      nodeSelector:
+        kubernetes.io/hostname: node-4
+      restartPolicy: Never
+      containers:
+        - name: kube-hunter
+          image: aquasec/kube-hunter:latest
+          # --pod: ruleaza ca insider (foloseste token-ul SA montat + scaneaza din pod)
+          # --active: include teste active (probe-uri kubelet/API mai agresive)
+          args: ["--pod", "--active", "--report", "yaml", "--log", "info"]

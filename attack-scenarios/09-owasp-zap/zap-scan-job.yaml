@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zap-scan
+  namespace: attack-target
+  labels:
+    role: attack-source
+    scenario: "09-owasp-zap"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1200          # plasa de siguranta: max 20 min
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        role: attack-source
+        scenario: "09-owasp-zap"
+    spec:
+      # node-4 = atacator "remote" (alt nod decat tinta). Dupa ce am adaugat un sensor
+      # Suricata systemd si pe node-3 (langa DVWA), traficul de atac e prins de
+      # senzorul node-3 (ajunge pe ens3-ul node-3, decapsulat din VXLAN) INDIFERENT
+      # de nodul atacatorului. Principiul: senzorul sta langa TINTA, nu langa atacator.
+      # Istoric: cand exista sensor doar pe node-2, ZAP pe node-4 -> DVWA node-3 dadea
+      # 0 alerte; cu sensor pe node-3 acum, e prins. Suricata NU se pune pe node-4 (ELK).
+      nodeSelector:
+        kubernetes.io/hostname: node-4
+      restartPolicy: Never
+      containers:
+        - name: zap
+          image: ghcr.io/zaproxy/zaproxy:stable
+          # zap-full-scan = spider + AJAX spider + ACTIVE scan (arunca payload-uri
+          # reale SQLi/XSS/path-traversal). -I = exit 0 chiar daca gaseste warnings.
+          # -m 2 = 2 min spider. Tinta = pod-ul DVWA direct (cross-node).
+          command: ["zap-full-scan.py"]
+          args: ["-t", "http://10.1.139.66", "-I", "-m", "2"]
