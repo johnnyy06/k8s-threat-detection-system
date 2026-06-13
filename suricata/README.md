@@ -8,7 +8,26 @@ Suricata rulează ca **serviciu systemd pe node-2** (nodul „security"), NU ca 
 - `rule-files:` în `/etc/suricata/suricata.yaml` listează doar `suricata.rules` (NU `suricata-local.rules`).
 - **`suricata-update list-enabled-sources` = „No enabled sources"** — dar regulile ET tot se încarcă (cele provided cu pachetul). Pentru update-uri live: `sudo suricata-update enable-source et/open && sudo suricata-update`.
 
-> ⚠️ **`rules/suricata-local.rules` din acest repo e STALE și NU e încărcat pe node-2** (fișierul nici nu există acolo). E un artefact istoric (15 reguli custom: port scan, SSH brute, K8s API, reverse shell). Dacă vrei reguli locale live, adaugă-le într-un fișier referențiat din `rule-files:` și restart.
+## Reguli locale custom — LIVE (2026-06-14)
+
+`rules/suricata-local.rules` e acum **încărcat pe ambele noduri** (deployat în
+`/var/lib/suricata/rules/suricata-local.rules`, adăugat în `rule-files:` din `suricata.yaml`,
+înaintea/lângă `suricata.rules`; `suricata-update` NU-l atinge). Cele 4 reguli stale vechi
+(port scan / SSH brute / K8s API / reverse shell) au fost **retrase** — erau redundante cu ET Open.
+
+**Decizie (Cap C/D):** ET Open (~63.8k reguli, mentenanțat) = baza, conform practicii din industrie;
+regulile locale **complementează** doar pe gap-uri K8s-specifice reale, legate de scenariile de atac:
+
+| SID | Detecție | MITRE | Gap acoperit |
+|---|---|---|---|
+| 1000010 | Acces cloud metadata IMDS `169.254.169.254` | T1552.005 | s10 (kube-hunter KHV053); IMDS real pe OpenStack |
+| 1000011 | Token SA/JWT `Bearer eyJ` pe HTTP necriptat | T1552.001 | s11 (lateral movement) — token expus în clar |
+| 1000012 | Exfiltrare DNS — etichetă query 50+ caractere | T1048.003 | s07 (DNS exfil) — complement network-side la Falco |
+
+**Validate live (2026-06-14):** toate 3 trag — 1000010 (→169.254.169.254), 1000011 (attack-pod→DVWA,
+**inter-nod** obligatoriu: intra-nod e Suricata-blind), 1000012 (pod→CoreDNS→upstream, node-2+node-3).
+Reload după editare: `sudo suricata -T -c /etc/suricata/suricata.yaml` apoi `systemctl restart suricata`
+(o schimbare în `rule-files:` necesită restart, nu doar reload USR2). Count reguli: node-2 47964→47967.
 
 ## Fix critic de config — HOME_NET (iterația B s09, aplicat 2026-05-31)
 
@@ -26,6 +45,23 @@ EXTERNAL_NET: "any"                                                     # ca pod
 Apoi: `sudo suricata -T -c /etc/suricata/suricata.yaml` (test) + `sudo systemctl restart suricata`.
 
 **Efect (validat):** s09 (ZAP vs DVWA) a trecut de la **0 semnături web** la **~208 alerte ET WEB_SERVER** (187 HIGH: SQLi WAITFOR DELAY, PHP RFI, PHP code injection, source disclosure). Detalii în `attack-scenarios/09-owasp-zap/expected-detections.md`.
+
+## Logrotate eve.json — bug găsit & reparat (2026-06-13)
+
+Suricata NU rotește singur log-urile; depinde de `logrotate` (rulează zilnic via `logrotate.timer`).
+La inspecție: **node-2 nu avea deloc `/etc/logrotate.d/suricata`** → `eve.json` ajunsese la **25,6 GB**
+(+ `stats.log` 14,6 GB) ≈ 40 GB pe un cluster cu disk I/O bottleneck. **node-3 avea un config dar
+îl sărea** cu `error: skipping ... parent directory has insecure permissions ... Set "su" directive`
+— logrotate modern refuză să rotească `/var/log/suricata` (deținut de `suricata:suricata`, nu root)
+fără directiva **`su`**.
+
+**Fix (ambele noduri):** `systemd-sensors/logrotate-suricata.conf` → `/etc/logrotate.d/suricata`,
+cu `su suricata suricata` + `copytruncate` (Suricata își păstrează fd-ul; compatibil cu Filebeat) +
+`daily`/`rotate 7`/`maxsize 2G`/`compress`. Verificare: `sudo logrotate -dv /etc/logrotate.d/suricata`
+(fără erori de permisiuni). Recuperare imediată a unui eve.json deja uriaș (datele sunt deja în ES):
+`sudo truncate -s 0 /var/log/suricata/{eve.json,stats.log,fast.log}` → node-2 a coborât 65%→17% disc.
+
+> Notă: `stats.log`/`fast.log` NU se shippează (Filebeat citește doar `eve.json`) — truncare 100% sigură.
 
 ## Topologie de captură single-node — descoperit & rezolvat
 
