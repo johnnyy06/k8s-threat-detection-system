@@ -1,0 +1,30 @@
+# Pod throwaway pentru a demonstra raspunsul automat LETAL al Falco Talon (kubernetes:terminate).
+# Numele EXACT `talon-demo` e cerut de regula Talon B (match output_fields k8s.pod.name=talon-demo),
+# ca sa NU omoare attack-pod-ul cand scenariul 02 (crypto mining) ruleaza acolo.
+#
+# Etic, ca scenariul 02: NU rulam un miner real — copiem /bin/sleep ca `xmrig`, ceea ce e suficient
+# ca Falco sa declanseze `K8S_THREAT: Crypto Mining Binary Detected` (match pe proc.name).
+#
+# Flux: kubectl apply -f talon-demo-pod.yaml -> exec /tmp/xmrig -> Falco detecteaza ->
+#       falcosidekick -> Talon -> kubernetes:terminate -> pod-ul dispare.
+# Pinned pe node-4 (imaginea ubuntu:22.04 e deja in cache acolo, ca la attack-pod).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: talon-demo
+  namespace: attack-target
+  labels:
+    app: talon-demo
+    purpose: falco-talon-terminate-demo
+spec:
+  restartPolicy: Never
+  nodeName: node-4
+  containers:
+    - name: miner
+      image: ubuntu:22.04
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          cp /bin/sleep /tmp/xmrig
+          echo "[talon-demo] pornesc fals 'xmrig' (=sleep) pentru a declansa Crypto Mining Binary Detected"
+          exec /tmp/xmrig 3600

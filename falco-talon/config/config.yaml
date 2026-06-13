@@ -1,0 +1,34 @@
+# Config.yaml NATIV Falco Talon (app 0.3.0) — aplicat ca override peste secret-ul `falco-talon-config`.
+#
+# DE CE override manual si nu prin values: chart-ul falco-talon 0.4.0 are 2 bug-uri in
+# templates/secrets.yaml care fac imposibila configurarea corecta prin -f values:
+#   1. `leader_election: {{ default true ...leaderElection }}` — `default true` trateaza `false`
+#      ca gol => leaderElection:false e ignorat, randeaza mereu true.
+#   2. `create_index_template / number_of_shards / number_of_replicas` citesc din calea
+#      `.notifiers.LOKI.*` in loc de `.notifiers.ELASTICSEARCH.*` => ies goale => notifier-ul ES
+#      pica la init ("invalid character 'u'...").
+# Workaround (reproductibil, vezi README): dupa `helm install/upgrade falco-talon`, aplica:
+#   kubectl create secret generic falco-talon-config -n falco-system \
+#     --from-file=config.yaml=falco-talon/config/config.yaml --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl rollout restart deploy/falco-talon -n falco-system
+#
+# leader_election:false — 1 replica + control-plane lent (lease renewal da context deadline exceeded).
+
+listen_address: 0.0.0.0
+listen_port: 2803
+watch_rules: true
+print_all_events: false
+
+deduplication:
+  leader_election: false
+  time_window_seconds: 5
+
+default_notifiers:
+  - elasticsearch
+
+notifiers:
+  elasticsearch:
+    url: http://10.11.0.3:9200
+    create_index_template: false
+    number_of_shards: 1
+    number_of_replicas: 1
