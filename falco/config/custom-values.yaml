@@ -118,6 +118,22 @@ customRules:
         - apt-get
         - frontend          # debconf /usr/share/debconf/frontend - citeste /etc/shadow in postinst (descoperit la scenariul 8)
 
+    # Componente de infrastructura care isi citesc LEGITIM propriul SA token / ca.crt
+    # montat la /var/run/secrets/kubernetes.io/serviceaccount/. Descoperit ca background-noise
+    # la validarea scenariilor 09/10/11: stack-ul de observabilitate din namespace-ul
+    # `observability` (Prometheus, Grafana, kube-state-metrics - instalate de mana ca 2 helm
+    # charts) se autentifica spre K8s API, deci citeste periodic token-ul + ca.crt.
+    # Allowlist pe nume de proces (NU namespace-exclude) ca sa ramana surgical - orice ALT
+    # proces din observability care citeste token-ul tot trage. NU includem nume generice
+    # (python/operator/promtail) ramase de la kube-prom-stack-ul abandonat (microk8s enable
+    # observability - prea greu) - acele pod-uri nu mai exista, doar evenimente istorice.
+    - list: allowed_sa_readers
+      items:
+        - prometheus
+        - kube-state-metr   # kube-state-metrics, truncat la 15 ch (TASK_COMM_LEN)
+        - grafana
+        - hostpath-provis   # provisioner PVC din kube-system (scalat la 0, dar revine la nevoie)
+
     - list: crypto_mining_binaries
       items:
         - xmrig
@@ -219,6 +235,16 @@ customRules:
             - [controller, /controller]
             - [kube-controller, /usr/bin/kube-controllers]
             - [metrics-server, /metrics-server]
+        # Stack-ul de observability (helm charts manuale in ns `observability`) contacteaza
+        # legitim K8s API: kube-state-metrics urmareste (watch) obiectele, Prometheus face
+        # service discovery + scrape pe API/kubelet. Acelasi background-noise descoperit la
+        # restart-ul KSM in sesiunea de tuning rev 27 (vezi allowed_sa_readers). proc.name
+        # trunchiat la 15 ch (kube-state-metr). NU includem python/promtail (kube-prom-stack sters).
+        - name: observability_stack
+          fields: [proc.name, proc.exepath]
+          values:
+            - [kube-state-metr, /kube-state-metrics]
+            - [prometheus, /bin/prometheus]
 
     - rule: "K8S_THREAT: Container Escape - Sensitive Mount Access"
       desc: Sensitive host path accessed from container.
@@ -366,7 +392,8 @@ customRules:
          fd.name startswith /run/secrets/kubernetes.io) and
         not (fd.name startswith /var/run/secrets/kubernetes.io/serviceaccount/token or
              fd.name startswith /run/secrets/kubernetes.io/serviceaccount/token) and
-        not proc.name in (allowed_shadow_readers)
+        not proc.name in (allowed_shadow_readers) and
+        not proc.name in (allowed_sa_readers)
       output: >
         SENSITIVE FILE ACCESS: Credentials or secrets read in container
         (file=%fd.name evt_type=%evt.type user=%user.name
@@ -390,7 +417,8 @@ customRules:
         not proc.name in (apiserver, controller-manager, kube-proxy,
                           metrics-server, metrics-sidecar, dashboard,
                           coredns, calico-node, kube-controller, controller,
-                          speaker, hostpath-provis)
+                          speaker, hostpath-provis) and
+        not proc.name in (allowed_sa_readers)
       output: >
         K8S SECRET ACCESS: ServiceAccount token read by unexpected process
         (file=%fd.name process=%proc.name command=%proc.cmdline
