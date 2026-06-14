@@ -134,6 +134,33 @@ customRules:
         - grafana
         - hostpath-provis   # provisioner PVC din kube-system (scalat la 0, dar revine la nevoie)
 
+    # Package managers + helper-ele lor — scriu LEGITIM in binary dirs / /etc la instalare.
+    # Allowlist pentru regulile FIM (Write Below Binary Dir / Sensitive Etc) ca sa nu dea FP la
+    # apt/dpkg (scenariile 06/08 fac apt-get install). proc.name truncat la 15 ch (TASK_COMM_LEN).
+    - list: package_mgmt_binaries
+      items:
+        - dpkg
+        - dpkg-preconfigu   # dpkg-preconfigure
+        - dpkg-deb
+        - dpkg-divert
+        - dpkg-split
+        - apt
+        - apt-get
+        - apt-config
+        - aptitude
+        - frontend          # debconf /usr/share/debconf/frontend
+        - update-alternativ # update-alternatives (apt postinst)
+        - ldconfig          # rebuild cache linker (apt postinst)
+        - rpm
+        - yum
+        - dnf
+        - apk
+        - snapd
+        - pip
+        - pip3
+        - npm
+        - gem
+
     - list: crypto_mining_binaries
       items:
         - xmrig
@@ -567,4 +594,65 @@ customRules:
         k8s_pod=%k8s.pod.name parent=%proc.pname)
       priority: CRITICAL
       tags: [malicious_image, T1610, mitre_execution, custom_rule, scenario_08]
+      source: syscall
+
+    # =========================================================================
+    # FIM scoped (File Integrity Monitoring) — detecteaza SCRIEREA (drop/tampering),
+    # independent de executie. Acopera gap-ul "fisier dropuit, nerulat" (FN structural
+    # la scenariul 07). Decizie profesionala: NU monitorizam scrieri generice (ex /tmp =
+    # zgomot), DOAR locatii in care un container imutabil nu ar trebui sa scrie niciodata
+    # la runtime (binary dirs + cai /etc relevante pentru persistence). Allowlist pe
+    # package managers (apt/dpkg) ca s06/s08 sa nu dea FP. NB: Falco vede ACTUL de scriere,
+    # NU continutul (nu stie daca e malware — asta e treaba YARA/ClamAV/image-scanning).
+    # =========================================================================
+    - rule: "K8S_THREAT: Write Below Binary Dir in Container"
+      desc: Executable directory modified at runtime - possible binary tampering / persistence.
+      condition: >
+        custom_container and
+        (evt.type in (open, openat, openat2, creat)) and
+        (evt.is_open_write = true) and
+        (fd.name startswith /bin/ or
+         fd.name startswith /sbin/ or
+         fd.name startswith /usr/bin/ or
+         fd.name startswith /usr/sbin/ or
+         fd.name startswith /usr/local/bin/ or
+         fd.name startswith /usr/local/sbin/) and
+        not proc.name in (package_mgmt_binaries)
+      output: >
+        PERSISTENCE / BINARY TAMPERING: File written to a system binary directory
+        (file=%fd.name evt_type=%evt.type user=%user.name process=%proc.name
+        command=%proc.cmdline container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name parent=%proc.pname)
+      priority: ERROR
+      tags: [persistence, T1554, mitre_persistence, custom_rule, fim]
+      source: syscall
+
+    - rule: "K8S_THREAT: Write Below Sensitive Etc Path in Container"
+      desc: Persistence-relevant /etc path modified at runtime (cron, init, ssh, passwd, etc.).
+      condition: >
+        custom_container and
+        (evt.type in (open, openat, openat2, creat)) and
+        (evt.is_open_write = true) and
+        (fd.name startswith /etc/cron or
+         fd.name startswith /etc/init.d/ or
+         fd.name startswith /etc/rc.local or
+         fd.name startswith /etc/systemd/ or
+         fd.name startswith /etc/profile.d/ or
+         fd.name startswith /etc/ld.so or
+         fd.name startswith /etc/ssh/ or
+         fd.name = /etc/passwd or
+         fd.name = /etc/shadow or
+         fd.name = /etc/sudoers or
+         fd.name startswith /etc/sudoers.d/) and
+        not proc.name in (package_mgmt_binaries) and
+        not proc.name in (allowed_shadow_readers)
+      output: >
+        PERSISTENCE / CONFIG TAMPERING: Sensitive /etc path written in container
+        (file=%fd.name evt_type=%evt.type user=%user.name process=%proc.name
+        command=%proc.cmdline container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name parent=%proc.pname)
+      priority: ERROR
+      tags: [persistence, T1543, mitre_persistence, custom_rule, fim]
       source: syscall
