@@ -170,6 +170,7 @@ infrastructure/ansible/inventories/hosts.ini
 
 CLAUDE.md
 docs/obs
+docs/diagrams/logos
 
 # ---------------------------
 # Datasets & ML (ml-ids) — mutat din ml-ids/.gitignore (2026-06-15)
