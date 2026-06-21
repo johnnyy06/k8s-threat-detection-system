@@ -13,6 +13,7 @@ metadata:
   labels:
     role: attack-source
 spec:
+  nodeName: node-2
   containers:
     - name: attacker
       image: ubuntu:22.04
@@ -22,3 +23,6 @@ spec:
         capabilities:
           add: ["SYS_ADMIN"]
   restartPolicy: Always
+# NOTA: dupa recreare, reinstaleaza uneltele (instalate manual, nu in imagine):
+#   kubectl exec -n attack-target attack-pod -- bash -c \
+#     "apt-get update && apt-get install -y nmap netcat-openbsd curl wget dnsutils tar iproute2"

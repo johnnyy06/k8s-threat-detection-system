@@ -36,7 +36,28 @@ Job `kube-hunter` (namespace `attack-target`, manifest `kube-hunter-job.yaml`), 
 **Detection rate:** toate cele 3 acțiuni observabile la runtime (token/secret read, API contact, packet sockets) sunt detectate. **False positive rate (Falco):** 0.
 
 ### Suricata
-**0 alerte de signature**, din două motive cumulate: (a) probe-ul către API server e HTTPS (TLS:443) → conținut criptat, niciun signature; scanarea de subnet via raw sockets (ARP/SYN) e recon, nu exploit cu payload cunoscut; și (b) **kube-hunter rulează pe node-4, iar sensorul Suricata e pe node-2 și vede doar traficul nodului său** (vezi s09 obs. #2) → traficul kube-hunter nici n-ar fi capturat. Indiferent de plasare, pentru recon K8s-native **Falco e detectorul, Suricata doar martorul de telemetrie** (și aici, nici măcar martor, dat fiind nodul). Confirmă concluzia: detecția lateral/recon K8s-native e treaba runtime-ului host-based.
+**0 alerte de signature (depasit, explicat in revalidare rev 30)**, din două motive cumulate: (a) probe-ul către API server e HTTPS (TLS:443) → conținut criptat, niciun signature; scanarea de subnet via raw sockets (ARP/SYN) e recon, nu exploit cu payload cunoscut; și (b) **kube-hunter rulează pe node-4, iar sensorul Suricata e pe node-2 și vede doar traficul nodului său** (vezi s09 obs. #2) → traficul kube-hunter nici n-ar fi capturat. Indiferent de plasare, pentru recon K8s-native **Falco e detectorul, Suricata doar martorul de telemetrie** (și aici, nici măcar martor, dat fiind nodul). Confirmă concluzia: detecția lateral/recon K8s-native e treaba runtime-ului host-based.
+
+## Re-validare pe helm rev 30 (2026-06-18) — kube-hunter pe node-2, gap-ul de metadata ACUM acoperit
+
+> **Pinning actual:** manifestul `kube-hunter-job.yaml` pinează acum **node-2** (nu node-4 ca în textul de
+> mai jos, care e istoric). node-2 are senzor Suricata → traficul de recon e parțial vizibil pe rețea.
+
+- **Falco: 14 evenimente — identic cu baseline-ul rev 26** (filtrat pe pod-ul `kube-hunter-*`):
+  `Sensitive File Read` ×7, `Packet socket created` ×4, `Kubernetes Secret Access` ×2,
+  `Contact K8S API Server` ×1. Detecție stabilă (Falco e DaemonSet, plasarea nu contează).
+- **Raport kube-hunter identic:** CAP_NET_RAW Enabled, KHV050 (SA token read), Access to pod's secrets,
+  KHV053 AWS Metadata Exposure (tot FP al tool-ului — on-prem, 404 de la 169.254.169.254).
+- **Suricata — SCHIMBARE: gap-ul de cloud-metadata din obs. #3 e ACUM ACOPERIT.** kube-hunter pe node-2
+  (nod cu senzor) sondează `169.254.169.254` → **regula custom Suricata `K8S-LOCAL Cloud Metadata Service
+  Access Attempt (IMDS 169.254.169.254)` (sid 1000010, T1552.005) se declanșează ×1**. Plus 3× anomalie
+  HTTP (zgomot). Deci „gap-ul de detecție" notat în obs. #3 (acces 169.254.169.254 neacoperit) **nu mai e
+  un gap la nivel NIDS** — regula custom deployată în `suricata/rules/suricata-local.rules` (live din
+  2026-06-14) îl prinde. Două condiții au făcut-o vizibilă: (1) kube-hunter rulează pe un nod cu senzor
+  (node-2), (2) regula custom există. Pe node-4 (vechea plasare) ar fi rămas Suricata-blind.
+- **Cross-validare nouă:** kube-hunter *raportează* „AWS Metadata Exposure" (FP al euristicii lui, on-prem)
+  iar Suricata *detectează* concret tentativa de acces IMDS — tool-ul ofensiv și detectorul converg pe
+  același IoC (chiar dacă verdictul tool-ului e greșit, *tentativa* e reală și acum detectată).
 
 ## Observații (Cap D / Cap 6)
 
@@ -44,7 +65,7 @@ Job `kube-hunter` (namespace `attack-target`, manifest `kube-hunter-job.yaml`), 
 
 2. **Citirea token-ului SA = semnal recurent de credential access.** kube-hunter face exact ce face un atacator real în faza de discovery: enumeră `/var/run/secrets/kubernetes.io/serviceaccount/` și citește token-ul. Cele 7× `Sensitive File Read` + 2× `Kubernetes Secret Access` confirmă că regulile custom acoperă atât tool-uri manuale (s04, s11: `cat`) cât și tool-uri automate (kube-hunter) — regula se uită la *fișierul accesat*, nu la *cine* îl accesează. Overlap intenționat cu s04/s11.
 
-3. **Fals pozitiv în raportul kube-hunter — „AWS Metadata Exposure" (KHV053, high).** kube-hunter a încercat să contacteze API-ul de cloud metadata (`169.254.169.254`) și a primit un **404 HTML** pe care euristica lui l-a interpretat greșit drept „expunere". Clusterul e **on-prem (VM-uri facultate), nu AWS** → nu există metadata service real. E un FP al *tool-ului ofensiv*, nu al sistemului nostru de detecție — dar e o lecție utilă: severitatea raportată de un scanner automat trebuie validată contextual (aici, „high" e de fapt zero risc). **Gap de detecție identificat**: încercarea de a accesa `169.254.169.254` (cloud metadata) **nu e acoperită de nicio regulă custom** — pe un cluster cloud real ar fi un IoC important (T1552.005). **Regulă candidată (NU implementată)**: `connect` către `169.254.169.254` din container → alertă (relevant pentru extinderea soluției la cloud-managed K8s, menționabil în Cap E „perspective").
+3. **Fals pozitiv în raportul kube-hunter — „AWS Metadata Exposure" (KHV053, high).** kube-hunter a încercat să contacteze API-ul de cloud metadata (`169.254.169.254`) și a primit un **404 HTML** pe care euristica lui l-a interpretat greșit drept „expunere". Clusterul e **on-prem (VM-uri facultate), nu AWS** → nu există metadata service real. E un FP al *tool-ului ofensiv*, nu al sistemului nostru de detecție — dar e o lecție utilă: severitatea raportată de un scanner automat trebuie validată contextual (aici, „high" e de fapt zero risc). **Gap de detecție identificat**: încercarea de a accesa `169.254.169.254` (cloud metadata) **nu e acoperită de nicio regulă custom** — pe un cluster cloud real ar fi un IoC important (T1552.005). **Regulă candidată (Falco — NU implementată)**: `connect` către `169.254.169.254` din container → alertă (relevant pentru extinderea soluției la cloud-managed K8s, menționabil în Cap E „perspective"). **Update 2026-06-18:** gap-ul e ÎNCHIS la nivel **NIDS** — regula custom Suricata sid 1000010 (`K8S-LOCAL Cloud Metadata Service Access Attempt`) prinde tentativa pe rețea (validat la re-rularea de mai sus). Rămâne deschis doar pe latura Falco (runtime), unde un `connect` la 169.254.169.254 încă n-are regulă custom.
 
 4. **Plasarea pe node-4 vs vizibilitatea Falco.** Job-ul rulează pe node-4, dar Falco fiind DaemonSet pe toate nodurile, detecția nu depinde de nod — spre deosebire de Suricata (s09) unde plasarea cross-node față de țintă e esențială pentru vizibilitate. Diferența de model (host-based runtime vs network-based IDS) e ilustrată direct de contrastul s10 ↔ s09.
 

@@ -33,7 +33,7 @@
 
 ## Re-validare pe helm rev 22 (2026-05-11)
 
-Re-rulat după migrarea la `collectors.containerEngine` + macro `not_system_namespace` upgradeat — **8 detecții** (vs 7 în runul original):
+Re-rulat după migrarea la `collectors.containerEngine` + macro `not_system_namespace` upgradeat — **8 detecții** (vs 7 în run-ul original):
 
 | Regulă | Priority | Count (rev 22) |
 |---|---|---|
@@ -43,7 +43,32 @@ Re-rulat după migrarea la `collectors.containerEngine` + macro `not_system_name
 | `Drop and execute new binary in container` (default) | Critical | 1 |
 | **Total** | | **8** |
 
-Diferența +1: la runul original `sudo` (pasul 6) declanșa doar `Drop and execute new binary` (default), iar `Sudo or Su Usage` doar `su` (pasul 4). Acum ambele invocări (`su` + `sudo`) declanșează `Sudo or Su Usage` — îmbunătățire (mai mult coverage). Detection rate rămâne 100%, 0 FP. Output-urile au acum metadata k8s completă (`k8s_ns=attack-target k8s_pod=attack-pod`). _Notă: `apt-get install sudo` la pasul 5 nu mai rulează postinst-ul (sudo deja instalat), deci nu mai apare FP-ul `dpkg-preconfigu` reading `/etc/shadow` — irelevant oricum, e deja în `allowed_shadow_readers`._
+Diferența +1: la run-ul original `sudo` (pasul 6) declanșa doar `Drop and execute new binary` (default), iar `Sudo or Su Usage` doar `su` (pasul 4). Acum ambele invocări (`su` + `sudo`) declanșează `Sudo or Su Usage` — îmbunătățire (mai mult coverage). Detection rate rămâne 100%, 0 FP. Output-urile au acum metadata k8s completă (`k8s_ns=attack-target k8s_pod=attack-pod`). _Notă: `apt-get install sudo` la pasul 5 nu mai rulează postinst-ul (sudo deja instalat), deci nu mai apare FP-ul `dpkg-preconfigu` reading `/etc/shadow` — irelevant oricum, e deja în `allowed_shadow_readers`._
+
+## Re-validare pe helm rev 30 (2026-06-18)
+
+Re-rulat după activarea regulilor FIM scoped (rev 30) — **9 detecții** (vs 8 în rev 22):
+
+| Regulă | Priority | Count (rev 30) |
+|---|---|---|
+| `K8S_THREAT: Privilege Escalation via Setuid/Setgid` | Critical | 3 |
+| `K8S_THREAT: Sudo or Su Usage in Container` | Warning | 2 (`su` pas 4 + `sudo` pas 6) |
+| `K8S_THREAT: Package Manager in Running Container` | Warning | 2 |
+| `Drop and execute new binary in container` (default) | Critical | 1 (`sudo`, ctime fresh post-install) |
+| `K8S_THREAT: Write Below Sensitive Etc Path in Container` | Error | **1 (NOU)** |
+| **Total** | | **9** |
+
+Diferența +1 față de rev 22: regula FIM `Write Below Sensitive Etc Path` (introdusă în rev 30)
+a tras pe `ldconfig.real` care scrie `/etc/ld.so.cache~` — un efect secundar al `apt-get install sudo`
+(scriptul `postinst` al pachetului rulează `ldconfig`). **Este un fals pozitiv**, nu o acțiune reală
+a atacatorului: lista de excepții `package_mgmt_binaries` include `apt`/`dpkg`, dar nu și `ldconfig`,
+care e pornit indirect de `postinst`. În plus, `ld.so.cache` este doar *cache-ul* recompilat de
+`ldconfig`, nu fișierul prin care un atacator obține persistență (acelea sunt `ld.so.preload` și
+`ld.so.conf`).
+**Candidat de tuning (Cap D):** fie adăugat `ldconfig`/`ldconfig.real` la `package_mgmt_binaries`,
+fie restrânsă lista de path-uri `ld.so` la `ld.so.preload`/`ld.so.conf` (păstrând semnalul de
+persistență real, eliminând zgomotul de cache). Detection rate al atacului propriu-zis rămâne
+100%; FP rate = 1/9 prin acest side-effect de package-install.
 
 ## Discoveries (relevant pentru Cap D și Cap 6)
 
@@ -57,7 +82,7 @@ La pasul 6 (`sudo whoami`), regula custom `Sudo or Su Usage` NU a tras pentru `s
 Same problem ca scenariul 4 — when default rule and custom rule overlap, default rule fires first if defined earlier in evaluation order. Pattern-ul se repetă → este **structural**, nu un bug izolat.
 
 ### 3. False positive structural — package install postinst scripts citesc /etc/shadow
-`dpkg-preconfigu` (truncat din `dpkg-preconfigure`), parte din procesul standard de instalare a pachetelor `.deb`, citește `/etc/shadow` în mod legitim pentru a verifica utilizatorii sistemului.
+`dpkg-preconfigu` (trunchiat din `dpkg-preconfigure`), parte din procesul standard de instalare a pachetelor `.deb`, citește `/etc/shadow` în mod legitim pentru a verifica utilizatorii sistemului.
 **Fix aplicat**: extins `allowed_shadow_readers` cu `dpkg`, `dpkg-preconfigu`, `apt`, `apt-get`.
 
 ### 4. Coverage cross-scenarii — apt-get în scenariul 6 declanșează regula scenariului 8

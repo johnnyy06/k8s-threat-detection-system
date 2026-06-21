@@ -2,7 +2,7 @@
 
 **MITRE ATT&CK:** T1046 (Network Service Discovery)
 
-**Primul scenariu cu cross-tool real Falco + Suricata.**
+**Cross-tool real Falco + Suricata.**
 
 ## Pași de atac
 
@@ -51,9 +51,9 @@
 
 ## Re-validare pe helm rev 22 (2026-05-11)
 
-Re-rulat după migrarea la `collectors.containerEngine` (metadata k8s acum populată) + macro `not_system_namespace` upgradeat:
+Re-rulat după migrarea la `collectors.containerEngine` (metadata k8s acum populată) + macro `not_system_namespace` upgradat:
 - **Falco: ~2017 evenimente, identic** — `Network Scanning Tool` ×6, `Data Exfiltration - Transfer Tool` ×3, `Package Manager` ×1, `Contact K8S API Server From Container` ×~1996 (default, port scan al API svc), `Drop and execute new binary` ×6, `Packet socket created` ×5.
-- **`K8S_THREAT: Crypto Mining Pool Connection` NU mai apare** — în runul original avea 1 hit accidental (port ephemeral care match-uia un port de mining); la re-rulare 0. False-pozitivul accidental a dispărut.
+- **`K8S_THREAT: Crypto Mining Pool Connection` NU mai apare** — la rularea originala avea 1 hit accidental (port efemer care facea match pe un port de mining); la re-rulare 0. False-pozitivul accidental a dispărut.
 - **Suricata: ~458 alerte** (vs 517 în runul original) — toate anomalii STREAM/HTTP la nivel de transport, în plafonul de variație run-to-run. Majoritatea spre `10.1.217.70` (pod falcosidekick) — efect colateral al celor ~2000 evenimente Falco shipped → volum TCP mare → Suricata STREAM warnings (cascadă de zgomot, observabilă pentru Cap 6).
 - Output-urile Falco au acum `container_name=attacker image=docker.io/library/ubuntu k8s_ns=attack-target k8s_pod=attack-pod`.
 
@@ -106,3 +106,20 @@ Regulile custom care AVEAU condiții unice (Sudo or Su, Package Manager, Sensiti
 | Detecții Suricata totale (alerts) | 517 |
 | **Cross-tool detection rate** | **100%** |
 | **False positive rate** | scăzut (Crypto Mining Pool 1 event accidental) |
+
+## Re-validare pe helm rev 30 (2026-06-18)
+
+Re-rulat (target `FALCO` actualizat la un pod falco curent pe node-3, 10.1.139.101 — IP-urile de
+pod sunt efemere). **Rezultate reproduse identic** față de rev 22 + update-ul node-2:
+- **Falco: 2021 evenimente** — `Contact K8S API Server From Container` ×2000 (port scan al API svc),
+  `Network Scanning Tool` ×6, `Drop and execute new binary` ×6, `Packet socket created` ×5,
+  `Data Exfiltration - Transfer Tool` ×3, `Package Manager` ×1. `Crypto Mining Pool Connection`
+  rămâne **0** (FP-ul accidental confirmat dispărut, ca în rev 22).
+- **Suricata: 14.790 evenimente totale**, semnături reale ET Open pe scan: **`ET SCAN Nmap Scripting
+  Engine User-Agent` ×4, `ET SCAN Possible Nmap User-Agent` ×4, `ET SCAN Suspicious inbound to
+  mySQL port 3306` ×2**, plus anomalii STREAM/HTTP la nivel de transport. Cross-tool autentic confirmat.
+- Niciun set nou de reguli FIM (rev 30) nu s-a declanșat aici (scan-ul nu scrie în `/etc` sau binar dirs).
+
+## Update 2026-06-18 — attack-pod mutat pe node-2 (vizibilitate Suricata)
+
+Inițial attack-pod era pe **node-4 (fără senzor Suricata)** → scan-ul era **Suricata-blind** (doar Falco îl prindea). După mutarea attack-pod pe **node-2** (`attack-target-setup.yaml`, `nodeName: node-2`), re-rulat: Suricata prinde acum scan-ul cu semnături reale ET Open — **`ET SCAN Nmap Scripting Engine User-Agent` ×4, `ET SCAN Possible Nmap User-Agent` ×4, `ET SCAN Suspicious inbound to mySQL port 3306` ×2**, pe ambii senzori (node-2 outbound + node-3 spre DVWA). Deci s05 are acum **detecție cross-tool autentică** (Falco syscall + Suricata network). Lecție (Cap D): plasarea atacatorului pe un nod cu senzor schimbă radical vizibilitatea NIDS.

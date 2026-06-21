@@ -2,7 +2,7 @@
 
 **MITRE ATT&CK:** T1496 (Resource Hijacking), T1105 (Ingress Tool Transfer)
 
-> **Notă etică / de design:** NU rulăm un miner real (consum de resurse, descărcare de malware). Folosim binare benigne (`/bin/sleep`, `/bin/true`) **redenumite** ca `xmrig`/`cpuminer`/`minerd` pentru a declanșa regula bazată pe `proc.name`, plus conexiuni la porturi tipice de mining pool (`connect()` se loghează indiferent dacă listenerul există). Demonstrează detecția fără a executa efectiv minerit.
+> **Notă etică / de design:** NU rulăm un miner real (consum de resurse, descărcare de malware). Folosim binare benigne (`/bin/sleep`, `/bin/true`) **redenumite** ca `xmrig`/`cpuminer`/`minerd` pentru a declanșa regula bazată pe `proc.name`, plus conexiuni la porturi tipice de mining pool (`connect()` se loghează indiferent dacă listenerul există). Demonstrează detecția fără a executa efectiv miner.
 
 ## Pași de atac
 
@@ -70,9 +70,71 @@ Pasul 3 (`bash -c 'exec 3<>/dev/tcp/1.1.1.1/3333'`) declanșează `K8S_THREAT: R
 
 **0 iterații de tuning necesare.** Singura ajustare relevantă (scoaterea 4444 din `crypto_mining_ports`) fusese deja făcută la rev 24 în urma testării s03.
 
-## Observații așteptate (de validat)
+## Re-validare pe helm rev 30 + Falco Talon activ (2026-06-18)
 
-1. **Detecție pe nume de binar — robustă pentru miner-e cunoscute, ușor de evitat** — regula `Crypto Mining Binary Detected` se bazează pe `proc.name in (lista de mineri cunoscuți)`. Prinde imediat un `xmrig` redenumit chiar dacă e de fapt alt binar (TP în contextul nostru de test — dovedește că regula funcționează). Dar un atacator care redenumește `xmrig` ca `nginx` sau `[kworker/0:1]` ar evita complet — vezi false negatives. Complementată de `Drop and execute new binary` (comportamentală: binar nou post-startup) și de `Crypto Mining Pool Connection` (rețea).
+Re-rulat — **18 evenimente** (vs 17 la rev 25). Net: crypto-core intact, dar `Crypto Mining Pool
+Connection` a dispărut și au apărut 2 detecții de ordin secundar de la Talon. Detaliu:
+
+| Regulă | Count rev 25 | Count rev 30 | Notă |
+|---|---|---|---|
+| `Drop and execute new binary` | 5 | 5 | = |
+| `K8S_THREAT: Binary Downloaded and Executed` | 3 | 3 | = |
+| `K8S_THREAT: Crypto Mining Binary Detected` | 3 | 3 | = (xmrig/cpuminer/minerd) |
+| `K8S_THREAT: Data Exfiltration - Transfer Tool` | 2 | 2 | = (curl, nc) |
+| `K8S_THREAT: Reverse Shell - Command Pattern` | 2 | 2 | = (misattribution `/dev/tcp`, vezi mai jos) |
+| `K8S_THREAT: Network Scanning Tool` | 1 | 1 | = (nc) |
+| `K8S_THREAT: Crypto Mining Pool Connection` | 1 | **0** | ⬇ fragilitate enrichment fd pe connect |
+| `Contact K8S API Server From Container` | 0 | **1** | ⬆ activitate proprie Falco Talon |
+| `K8S_THREAT: Kubernetes Secret Access from Pod` | 0 | **1** | ⬆ activitate proprie Falco Talon |
+| **Total** | **17** | **18** | |
+
+### 1. `Crypto Mining Pool Connection` = 0 (era 1) — aceeași fragilitate de enrichment ca s07
+
+Pasul 4 (`nc -w 2 1.1.1.1 5555`) nu mai declanșează regula de pool: condiția cere `fd.rport in
+crypto_mining_ports` pe evenimentul `connect`/`sendto`, dar `fd.rport` nu s-a populat pe acest connect
+TCP — **același edge-case de enrichment pe evenimente de rețea** documentat la s07 (DNS Exfiltration =
+0). Enrichment-ul `fd.*` pe evenimente de rețea (UDP connect/sendto ȘI unele TCP connect) e
+**non-determinist** pe stack-ul ăsta (modern eBPF + container plugin). Pasul 4 rămâne detectat prin
+`Network Scanning Tool` + `Data Exfil Transfer Tool` + `Drop and execute` — deci coverage la nivel de
+syscall/execve (robust) compensează pierderea regulii bazate pe port (fragilă).
+
+### 2. Două detecții de ordin secundar — Falco Talon se auto-detectează
+
+Pasul 3 (`/dev/tcp/1.1.1.1/3333`) trage `Reverse Shell - Command Pattern` ×2 → falcosidekick → **Talon
+reacționează** (regula *"Reverse shell -> izolare + label"*, **unscoped on pod** → prinde și attack-pod).
+Pentru a aplica răspunsul, **pod-ul `falco-talon` își citește propriul SA token și contactează K8s API**,
+ceea ce declanșează la rândul lor:
+- `K8S_THREAT: Kubernetes Secret Access from Pod` ×1 — `process=falco-talon` citește
+  `/var/run/secrets/.../token` (confirmat: `kubernetes.pod.name=falco-talon-...`).
+- `Contact K8S API Server From Container` ×1 — `falco-talon` deschide conexiune spre `10.152.183.1:443`.
+
+Acestea sunt **FP-uri de ordin secundar ale sistemului de răspuns prins de sistemul de detecție** —
+falco-talon e o componentă de infra care **trebuie** să-și citească token-ul și să apeleze API-ul.
+**Candidat de tuning (Cap D/Cap E):** adaugă `falco-talon` la lista `allowed_sa_readers` (lângă
+`prometheus`/`grafana`/`kube-state-metr`) ȘI o excepție în regula default `Contact K8S API Server From
+Container` (ca pentru `observability_stack`) — exact familia de FP rezolvată la helm rev 27/28 pentru
+stack-ul de observabilitate, acum reapărută pentru responder. _Notă: aceleași 2 detecții apar la s03 din
+aceeași cauză (activitatea Talon), unde fuseseră etichetate inițial drept "zgomot de cluster" — corectat._
+
+### 3. Suricata prinde acum pattern-ul `/dev/tcp`
+
+`ET WEB_SERVER Possible bash shell piped to dev tcp ... M3` ×2 — pe conexiunea bash `/dev/tcp/1.1.1.1/3333`
+(pasul 3), care traversează senzorul node-2. Deci pasul 3 e acum **detectat cross-tool** (Falco
+`Reverse Shell Pattern` + Suricata `dev tcp` signature) — chiar dacă, ca și la Falco, e aceeași
+misattribution (e pool-checkin, semnalat ca shell). Plus 1 anomalie STREAM (zgomot). Față de rev 25
+(„4 alerte, toate zgomot STREAM"), acum există semnătură reală — efectul attack-pod pe node-2 + HOME_NET.
+
+### 4. Răspuns automat Talon — attack-pod izolat reversibil; talon-demo NEatins
+
+Talon a izolat attack-pod (NetworkPolicy egress doar spre svc CIDR + label `compromised=true`) prin regula
+de reverse-shell. **Revertat** după run (`kubectl delete networkpolicy attack-pod -n attack-target` +
+`kubectl label pod attack-pod compromised-`; egress restaurat → 302). Regula Talon de **crypto-mining**
+(`Crypto Mining Binary Detected` → Terminate) e **scopuită strict pe `k8s.pod.name=talon-demo`**, deci
+attack-pod **NU** a fost terminat (verificat — design corect din helm rev 29).
+
+## Observații așteptate
+
+1. **Detecție pe nume de binar — robustă pentru minere cunoscute, ușor de evitat** — regula `Crypto Mining Binary Detected` se bazează pe `proc.name in (lista de mineri cunoscuți)`. Prinde imediat un `xmrig` redenumit chiar dacă e de fapt alt binar (TP în contextul nostru de test — dovedește că regula funcționează). Dar un atacator care redenumește `xmrig` ca `nginx` sau `[kworker/0:1]` ar evita complet — vezi false negatives. Complementată de `Drop and execute new binary` (comportamentală: binar nou post-startup) și de `Crypto Mining Pool Connection` (rețea).
 
 2. **Detecție pe port — euristică, după curățarea listei** — `crypto_mining_ports` a fost curățată la rev 24 (scos 4444, care cauza atribuire greșită la reverse shell-urile, vezi s03). Porturile rămase (3333/5555/7777/14444/45700) sunt specifice pool-urilor Stratum. `connect()` la unul din ele dintr-un container = semnal puternic. Funcționează chiar dacă conexiunea eșuează (nimeni nu ascultă) — syscall-ul `connect` se loghează cu `fd.rport` setat.
 

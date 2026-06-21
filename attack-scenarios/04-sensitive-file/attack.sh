@@ -1,6 +1,5 @@
 #!/bin/bash
 # Scenariul 4 - Sensitive File / Secret Access (T1552)
-# Ruleaza atacul si verifica rezultatele in Elasticsearch
 
 set -e
 

@@ -20,7 +20,7 @@ DVWA_POD=10.1.139.66   # tinta (node-3), verificat 2026-05-30
 
 echo "=================================================="
 echo "Scenariul 9 - OWASP ZAP DAST scan vs DVWA ($DVWA_POD)"
-echo "ZAP ruleaza pe node-4 (atacator remote) -> DVWA pe node-3 (prins de sensorul node-3)"
+echo "ZAP ruleaza pe node-2 (worker cu sensor) -> DVWA pe node-3 (prins de sensorul node-3, inter-nod)"
 echo "Start: $(date +%T)"
 echo "=================================================="
 

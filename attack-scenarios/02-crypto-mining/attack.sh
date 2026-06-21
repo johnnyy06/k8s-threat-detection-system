@@ -10,10 +10,10 @@ POD=attack-pod
 NS=attack-target
 source "$(dirname "$0")/../_env.sh"
 
-# Tinta pentru "mining pool" - IP public; nicio listenare reala pe porturile astea,
+# Tinta pentru "mining pool" - IP public; niciun listen real pe porturile astea,
 # dar syscall-ul connect() se logheaza oricum cu fd.rport setat.
 # (Folosim acelasi IP public pentru ambele - evitam 10.152.183.1 care e svc-ul K8s API
-#  si ar declansa zgomot irelevant 'Contact K8S API Server From Container'.)
+# si ar declansa zgomot irelevant 'Contact K8S API Server From Container'.)
 POOL_IP=1.1.1.1
 CLUSTER_IP=1.1.1.1
 

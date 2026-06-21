@@ -10,17 +10,22 @@
 4. `cat /var/run/secrets/kubernetes.io/serviceaccount/token` — citire ServiceAccount token (ar permite call-uri la K8s API ca pod-ul)
 5. `cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt` — citire CA cert al cluster-ului
 
-## Rezultate finale (după 3 iterații de tuning)
+## Rezultate finale (re-validat 2026-06-18, helm rev 30)
 
 | Regulă | Priority | Count |
 |---|---|---|
-| `K8S_THREAT: Sensitive File Read in Container` | Warning | 3 |
+| `K8S_THREAT: Sensitive File Read in Container` | Warning | 4 |
 | `K8S_THREAT: Kubernetes Secret Access from Pod` | Notice | 1 |
 | `Read sensitive file untrusted` (default Falco) | Warning | 1 |
-| **Total** | | **5** |
+| **Total** | | **6** |
 
-**Detection rate**: 100% (5 detecții / 5 pași de atac)
+**Detection rate**: 100% (6 detecții / 5 pași de atac)
 **False positive rate**: 0%
+
+Cele 4 hit-uri `Sensitive File Read`: `/etc/shadow` (pas 1), `/etc/gshadow` (pas 2),
+directorul `/var/run/secrets/kubernetes.io/serviceaccount` (pas 3 — `ls` deschide
+directorul cu `openat`), `ca.crt` (pas 5). Pasul 4 (`cat token`) trage regula `Secret
+Access` (Notice) în loc de `Sensitive File Read`.
 
 ## Procesul de tuning (relevant pentru Cap D)
 
@@ -33,7 +38,7 @@
 
 ## Re-validare pe helm rev 22 (2026-05-11)
 
-Re-rulat după migrarea la `collectors.containerEngine` + macro-ul `not_system_namespace` upgradeat — **rezultate identice** (5 detecții, 0 FP), dar acum output-ul Falco conține metadata k8s completă: `container_name=attacker image=docker.io/library/ubuntu k8s_ns=attack-target k8s_pod=attack-pod`. Vezi `07-data-exfiltration/expected-detections.md` (iterația C) pentru cum a fost rezolvat enrichment-ul.
+Re-rulat după migrarea la `collectors.containerEngine` + macro-ul `not_system_namespace` upgradat — **rezultate identice** (5 detecții, 0 FP), dar acum output-ul Falco conține metadata k8s completă: `container_name=attacker image=docker.io/library/ubuntu k8s_ns=attack-target k8s_pod=attack-pod`. Vezi `07-data-exfiltration/expected-detections.md` (iterația C) pentru cum a fost rezolvat enrichment-ul.
 
 ## Discoveries (relevant pentru Cap 6 — Limitări)
 
@@ -50,5 +55,9 @@ N/A — atac local, fără trafic de rețea.
 Scăzut — acest scenariu e dominat de Falco. Util ca baseline simplu pentru a confirma pipeline-ul.
 
 ## False negatives confirmate
-- `ls` în sine nu este detectat când nu deschide fișiere de citit (doar enumerare directă)
 - mmap / memory-mapped I/O nu sunt detectate (regulile filtrează doar `evt.type in (open, openat, openat2)`)
+
+> Notă (2026-06-18): nota anterioară "`ls` nu e detectat" nu mai este validă — `ls` pe
+> directorul `serviceaccount` execută un `openat` pe director, care matchează regula
+> `Sensitive File Read` (vizibil ca al 3-lea hit, `file=/var/run/secrets/.../serviceaccount`).
+> `ls` rămâne nedetectat doar dacă directorul țintă nu e în lista de path-uri sensibile.

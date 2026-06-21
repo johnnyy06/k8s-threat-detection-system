@@ -49,6 +49,31 @@ Output-urile au acum `image=docker.io/library/ubuntu k8s_ns=attack-target k8s_po
 
 _Caveat de reproducibilitate: numărul total variază 29–33 între rulări — cele 3 listenere `nc -lnvp` sunt pornite în background printr-un `kubectl exec ... -- bash -c "... &"`, iar shell-ul iese imediat → uneori procesul backgrounded primește SIGHUP înainte de a face exec pe nc. Detecțiile de bază (`Reverse Shell - Command Pattern` ×9, `Redirect STDOUT/STDIN` ×4) sunt stabile; doar count-urile "bonus" (Netcat Listener / Network Scanning / Drop&Execute pe listenere) fluctuează. Fix posibil: `nohup`/`setsid` pe listenere._
 
+## Re-validare pe helm rev 30 + Falco Talon activ (2026-06-18)
+
+Re-rulat cu Falco Talon deployat — **34 evenimente**:
+`Reverse Shell - Command Pattern` ×9, `Drop and execute new binary` ×5, `Data Exfiltration -
+Transfer Tool` ×5, `Network Scanning Tool` ×5, `Redirect STDOUT/STDIN` ×4, `Netcat Listener` ×3,
+`Netcat Remote Code Execution` ×1, + `Contact K8S API Server` ×1 și `Kubernetes Secret Access` ×1.
+- **`Crypto Mining Pool Connection` rămâne 0** — confirmă fix-ul rev 24 (portul 4444 scos din `crypto_mining_ports`).
+- Cele 2 reguli străine de TTP (`Contact K8S API` ×1 + `Secret Access` ×1) sunt de fapt **activitatea
+  proprie a Falco Talon** (pod-ul `falco-talon` își citește SA token-ul + contactează K8s API când aplică
+  răspunsul de izolare la regula de reverse shell de mai jos) — confirmat la s02 prin filtrare pe
+  `kubernetes.pod.name=falco-talon`. **FP de ordin secundar al responder-ului prins de detector** (candidat
+  de tuning: adaugă `falco-talon` la `allowed_sa_readers` + excepția `Contact K8S API` — vezi s02).
+  Core-ul reverse-shell (Pattern ×9 + Redirect ×4) rămâne stabil.
+
+**Răspuns automat Falco Talon (validat aici):** regula custom `Reverse Shell - Command Pattern`
+a declanșat prin falcosidekick → Talon regula *"Reverse shell in container -> izolare + label"*:
+- `Label Compromised` → attack-pod etichetat `compromised=true`
+- `Isolate Pod` (kubernetes:networkpolicy) → creat NetworkPolicy `attack-pod` în ns `attack-target`
+  cu egress permis DOAR spre `10.152.183.0/24` (svc CIDR), blocând restul. Verificat: `curl` spre
+  DVWA (10.1.139.66) a expirat (egress blocat) sub izolare; după revert → 302.
+- Notifier ES → evenimentele de răspuns în indexul `falco-talon-*`.
+- **Reversibilitate:** `kubectl delete networkpolicy attack-pod -n attack-target` +
+  `kubectl label pod attack-pod -n attack-target compromised-` restaurează complet conectivitatea.
+  **Obligatoriu de dat revert înainte de scenariile de rețea ulterioare (s07 exfil).**
+
 ## Discoveries (relevant pentru Cap D și Cap 6)
 
 ### 1. Regulă custom `Shell with Network FD` nu se declanșează — defect de design

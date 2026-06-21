@@ -56,9 +56,30 @@
 | A (baseline, helm rev 24) | reguli existente | 10 | 9 | 1 (`frontend` debconf citește `/etc/shadow`) |
 | B (propus) | adaugă `frontend` la lista `allowed_shadow_readers` (alături de `dpkg`, `dpkg-preconfigu`, `apt`, `apt-get`) | →9 | 9 | 0 |
 
+## Re-validare pe helm rev 30 (2026-06-18)
+
+### Detecții (10 = 9 TP + 1 FP nou)
+
+| Regulă | Priority | Count (rev 30) | Tip |
+|---|---|---|---|
+| `Drop and execute new binary in container` | Critical | 3 | TP (openssl postinst, curl, /tmp/payload2) |
+| `K8S_THREAT: Binary Downloaded and Executed` | Critical | 3 | TP (chmod pe /tmp/payload, /tmp/stage2.sh, /tmp/payload2) |
+| `K8S_THREAT: Package Manager in Running Container` | Warning | 2 | TP (apt-get update + install curl) |
+| `K8S_THREAT: Data Exfiltration - Transfer Tool` | Warning | 1 | TP (curl) |
+| `K8S_THREAT: Write Below Sensitive Etc Path in Container` | Error | **1** | **FP (NOU)** |
+| **Total** | | **10** | |
+
+Diferența +1 față de rev 25: **același FP FIM ca la s06** — `ld.so.cache~` scris de `ldconfig.real`
+(invocat de postinst-ul `apt install curl`); `ldconfig` nu e în allowlist-ul `package_mgmt_binaries`.
+Vezi s06 pentru candidatul de tuning (adaugă `ldconfig`/`ldconfig.real` la allowlist SAU restrânge
+path-urile `ld.so` la `ld.so.preload`/`ld.so.conf`). **FP-ul vechi `frontend`/`/etc/shadow` NU reapare**
+(allowlist-ul `allowed_shadow_readers` din rev 25 ține). De notat: `apt install curl` **NU** a declanșat
+`Write Below Binary Dir` pe `/usr/bin/curl` — `dpkg` e în `package_mgmt_binaries`, deci scrierea binarului
+de pachet e corect allowlist-ată; doar `ldconfig` scapă.
+
 ## Observații așteptate (de validat)
 
-1. **Detecția deployment-ului în sine — NU se face (limitare confirmată)** — pasul 1 (deploy pod privilegiat) e o acțiune la nivel de K8s API, nu un syscall în pod-ul atacatorului. Regulile default `Launch Privileged Container` / `Launch Sensitive Mount Container` **nu sunt active** în acest ruleset Falco (0 hits all-time; nu apar în `falco -L`) — în Falco modern aceste reguli au fost mutate la `maturity: incubating`/`sandbox` și nu se încarcă în profilul default. Plugin-ul `k8saudit` (care ar prinde `CREATE pod` cu `privileged:true` din audit log-ul K8s API) **nu e activat** pe acest cluster. **Concluzie pentru Cap 6**: detecția deployment-urilor malițioase necesită un layer de admission control (OPA/Gatekeeper, Kyverno) sau audit-logging (`k8saudit` plugin) — out of scope pentru un PoC Falco(runtime)+Suricata(network). Falco prinde **consecințele** rulării unui container malițios (pașii 2-5), nu **actul** de a-l crea. Aceasta e o demarcație importantă a perimetrului soluției.
+1. **Detecția deployment-ului în sine — NU se face (limitare confirmată)** — pasul 1 (deploy pod privilegiat) e o acțiune la nivel de K8s API, nu un syscall în pod-ul atacatorului. _Stratul de prevenție lipsă (admission control: PSA/Kyverno) e analizat în `docs/admission-control-recommendation.md` (material Cap 6) — acolo se arată cum `malicious-pod.yaml` ar fi respins la creare._ Regulile default `Launch Privileged Container` / `Launch Sensitive Mount Container` **nu sunt active** în acest ruleset Falco (0 hits all-time; nu apar în `falco -L`) — în Falco modern aceste reguli au fost mutate la `maturity: incubating`/`sandbox` și nu se încarcă în profilul default. Plugin-ul `k8saudit` (care ar prinde `CREATE pod` cu `privileged:true` din audit log-ul K8s API) **nu e activat** pe acest cluster. **Concluzie pentru Cap 6**: detecția deployment-urilor malițioase necesită un layer de admission control (OPA/Gatekeeper, Kyverno) sau audit-logging (`k8saudit` plugin) — out of scope pentru un PoC Falco(runtime)+Suricata(network). Falco prinde **consecințele** rulării unui container malițios (pașii 2-5), nu **actul** de a-l crea. Aceasta e o demarcație importantă a perimetrului soluției.
 
 2. **`Binary Downloaded and Executed` — pattern comportamental robust** — prinde lanțul clasic "download → chmod → execute" indiferent de natura payload-ului (regula se uită la *locația* `/tmp`–`/dev/shm` + actul de a face executabil / a rula din ele, nu la conținut). Complementează `Drop and execute new binary` (care se uită la ctime vs container start).
 

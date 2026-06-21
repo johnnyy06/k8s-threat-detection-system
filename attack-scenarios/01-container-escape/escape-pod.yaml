@@ -9,6 +9,7 @@ metadata:
   labels:
     role: container-escape
 spec:
+  nodeName: node-3
   hostPID: true
   hostNetwork: true
   containers:

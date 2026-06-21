@@ -9,6 +9,7 @@ metadata:
   labels:
     role: malicious-deployment
 spec:
+  nodeName: node-3
   hostPID: true
   containers:
     - name: payload

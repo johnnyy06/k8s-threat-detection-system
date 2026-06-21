@@ -1,8 +1,8 @@
 #!/bin/bash
 # Scenariul 8 - Malicious Deployment (T1610 Deploy Container, T1105 Ingress Tool Transfer,
 # T1059 Command and Scripting Interpreter)
-# 1. Deploy un pod malitios (privilegiat, hostPID, hostPath /). 2-5: actiuni post-deployment
-#    in interiorul lui (package manager, descarcare payload, chmod +x in /tmp, executie script).
+# 1. Deploy un pod malitios (privilegiat, hostPID, hostPath /). 
+# 2-5: actiuni post-deployment in interiorul lui (package manager, descarcare payload, chmod +x in /tmp, executie script).
 
 set -e
 
@@ -25,8 +25,8 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "[step 1/5] kubectl apply malicious-pod.yaml (privileged, hostPID, hostPath /)"
 kubectl apply -f "$HERE/malicious-pod.yaml"
-echo "  ... astept pod Ready (max 60s)"
-kubectl wait --for=condition=Ready pod/$MPOD -n $NS --timeout=60s || kubectl get pod $MPOD -n $NS
+echo "  ... astept pod Ready (max 180s; primul pull al imaginii pe un nod nou e lent pe disk-ul asta)"
+kubectl wait --for=condition=Ready pod/$MPOD -n $NS --timeout=180s || kubectl get pod $MPOD -n $NS
 echo ""
 sleep 2
 

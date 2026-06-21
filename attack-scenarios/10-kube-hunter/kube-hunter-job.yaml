@@ -15,10 +15,8 @@ spec:
         role: attack-source
         scenario: "10-kube-hunter"
     spec:
-      # node-4 (alaturi de attack-pod) - departe de dqlite (node-1) si de DVWA (node-3).
-      # Falco e DaemonSet pe toate nodurile, deci detecteaza indiferent de plasare.
       nodeSelector:
-        kubernetes.io/hostname: node-4
+        kubernetes.io/hostname: node-2
       restartPolicy: Never
       containers:
         - name: kube-hunter

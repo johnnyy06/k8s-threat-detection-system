@@ -89,7 +89,7 @@ sleep 2
 
 # ---------------------------------------------------------------------------
 # step 5/5 - East-west move: din pod-ul compromis spre un ALT pod (DVWA) [T1021]
-#            Trafic cross-node (node-4 -> node-3) => vizibil pentru Suricata
+#            Trafic cross-node (node-2 -> node-3)
 # ---------------------------------------------------------------------------
 echo "[step 5/5] Pod-to-pod: curl http://$DVWA_POD/  +  port-probe nc 3306 (MySQL DVWA)"
 kubectl exec -n $NS $POD -- bash -c "

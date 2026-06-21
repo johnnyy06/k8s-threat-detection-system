@@ -58,9 +58,17 @@
 
 **0 iterații de tuning necesare** — regulile de container escape acoperă complet tehnicile testate, fără fals-pozitive.
 
+## Re-validare pe helm rev 30 (2026-06-18)
+
+**Rezultate identice** cu baseline-ul rev 25: **13 detecții, 0 FP** — `Container Escape - Nsenter or
+Chroot Usage` ×9 (nsenter ×4, chroot ×1, unshare ×4), `Container Escape - Sensitive Mount Access` ×2
+(`/proc/sysrq-trigger`, `/run/containerd/containerd.sock`), `Sensitive File Read in Container` ×1 +
+`Read sensitive file untrusted` ×1 (host `/etc/shadow`, epoch `19998`). Niciun set FIM nou (rev 30) nu
+s-a declanșat (escape-ul nu scrie în `/etc` sau binar dirs — doar citește).
+
 ## Observații așteptate (de validat)
 
-1. **Deployment-ul escape-pod-ului (pasul 1) — nedetectat de Falco** — la fel ca la scenariul 8: crearea unui pod privilegiat e o acțiune K8s API; regulile `Launch Privileged Container`/`Launch Sensitive Mount Container` nu sunt active, `k8saudit` nu e activat. Falco prinde *consecințele* (pașii 2-6), nu *configurația greșită* care le permite. **Lecție**: defense in depth cere și un layer de policy/admission (Cap 6).
+1. **Deployment-ul escape-pod-ului (pasul 1) — nedetectat de Falco** — la fel ca la scenariul 8: crearea unui pod privilegiat e o acțiune K8s API; regulile `Launch Privileged Container`/`Launch Sensitive Mount Container` nu sunt active, `k8saudit` nu e activat. Falco prinde *consecințele* (pașii 2-6), nu *configurația greșită* care le permite. **Lecție**: defense in depth cere și un layer de policy/admission (Cap 6) — analiză detaliată + mapare pe scenarii în `docs/admission-control-recommendation.md`.
 
 2. **Path matching depinde de cum e montat host-ul** — regula `Sensitive Mount Access` verifică `fd.name startswith /run/containerd/containerd.sock` etc. Funcționează doar dacă path-ul în container coincide cu cel de pe host. Am montat socket-ul exact la `/run/containerd/containerd.sock` (nu la `/host/run/...`) tocmai ca regula să facă match — un atacator care montează host-ul la un prefix arbitrar (`/host`, `/mnt`) ar evita match-ul pe path. Citirea `/host/etc/shadow` (prefix `/host`) NU declanșează `Sensitive File Read` (regula verifică `fd.name = /etc/shadow` exact). **Limitare structurală**: regulile bazate pe path absolut nu acoperă mount-uri la prefixe arbitrare. `chroot /host` apoi `/etc/shadow` ESTE prins pentru că chroot schimbă rezoluția de path → kernel-ul vede `/etc/shadow`.
 

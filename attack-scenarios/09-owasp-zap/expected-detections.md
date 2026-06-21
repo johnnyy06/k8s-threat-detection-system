@@ -10,11 +10,54 @@
 
 ## Execuție
 
-Job `zap-scan` (namespace `attack-target`, manifest `zap-scan-job.yaml`), image `ghcr.io/zaproxy/zaproxy:stable` (~1.3 GB, **pre-pull necesar** — vezi mai jos), pinned pe **node-4** (atacator „remote"). Țintă: pod-ul DVWA `http://10.1.139.66` (node-3). După adăugarea unui sensor Suricata și pe node-3 (vezi obs. #2), atacul e prins de **senzorul node-3** (lângă țintă) indiferent de nodul atacatorului. *(Inițial, când exista sensor doar pe node-2, ZAP trebuia pe node-2 — vezi istoricul din obs. #2.)*
+Job `zap-scan` (namespace `attack-target`, manifest `zap-scan-job.yaml`), image `ghcr.io/zaproxy/zaproxy:stable` (~1.3 GB, **pre-pull necesar** — vezi mai jos), pe **node-2** (worker cu senzor Suricata). Țintă: pod-ul DVWA `http://10.1.139.66` (node-3). ZAP pe node-2 → DVWA node-3 e **inter-nod**, deci traficul de atac ajunge la DVWA pe `ens3`-ul **node-3** (decapsulat din VXLAN) și e prins de **senzorul node-3** (lângă țintă), iar outbound-ul ZAP e prins în plus de senzorul node-2 (dublă vizibilitate).
 
-**De ce node-4 (atacator remote) merge acum** (vezi obs. #2): există un sensor Suricata pe **node-3** (lângă DVWA). Un sensor capturează doar traficul de pe `ens3`-ul nodului său, dar traficul de atac ajunge la DVWA **pe `ens3`-ul node-3** (decapsulat din VXLAN), deci senzorul node-3 îl prinde indiferent de nodul atacatorului. Plasăm ZAP pe node-4 tocmai ca să demonstrăm cazul „atacator pe alt nod decât ținta".
+**Notă topologie (istoric, vezi obs. #2):** un sensor captează doar traficul de pe `ens3`-ul nodului său. De aceea, la un moment dat, ZAP a fost testat și pe **node-4** («atacator pe alt nod decât ținta», cu senzorul node-3 prinzând atacul). Pinning-ul **curent** e însă **node-2** — model de amenințare mai plauzibil (atacatorul ajunge pe nodurile cu workload-uri, nu pe nodul ELK) + dublă vizibilitate NIDS.
 
-> **Pre-pull** (o singură dată, imaginea e mare pe discul lent): aplică un Job tranzitoriu cu aceeași imagine pe node-4 înainte de prima rulare. Ulterior imaginea e cache-uită pe nod.
+> **Pre-pull** (o singură dată, imaginea e mare pe discul lent): aplică un Job tranzitoriu cu aceeași imagine pe **node-2** înainte de prima rulare. Ulterior imaginea e cache-uită pe nod.
+
+> **Update pinning (2026-06-17→18):** manifestul `zap-scan-job.yaml` este pinned acum ZAP pe **node-2**
+> (nu node-4). Motiv: model de amenințare mai plauzibil (atacatorul ajunge pe nodurile cu workload-uri,
+> nu pe nodul ELK) + vizibilitate dublă (outbound-ul ZAP prins de senzorul node-2 ȘI ZAP→DVWA inter-nod
+> prins de senzorul node-3, sensor-near-target). Secțiunile de mai jos care spun „node-4 (atacator remote)"
+> sunt **istorice** (validarea topologiei single-sensor din mai). Vezi re-validarea 2026-06-18 de mai jos.
+
+## Re-validare pe helm rev 30 (2026-06-18) — ZAP pe node-2 → DVWA node-3
+
+Re-rulat cu ZAP pe **node-2** (target DVWA `10.1.139.66`, node-3). Captură pe ambii senzori
+(node-2 outbound + node-3 near-target). **Reproduce robust** detecția cross-tool:
+
+- **ZAP report:** 129 PASS / 12 WARN-NEW / 0 FAIL-NEW — identic conceptual (DVWA neautentificat = zid de
+  login; WARN-uri de igienă: Cookie No HttpOnly ×6, no SameSite ×6, Server version leak ×9, CORP missing ×7,
+  X-Content-Type-Options ×5, Directory Browsing ×3, CSP ×2, …). ZAP-ul actual testează și reguli noi
+  (React2Shell, Text4shell, Spring4Shell, Log4Shell) — toate PASS (în spatele auth-ului).
+- **Suricata: 745 alerte** (sev HIGH=233, medium=96, low/anomaly=416) din ~4900 evenimente
+  (http 2562, fileinfo 2435, flow 579, anomaly 309, dns 148, tls 50). Semnături ET de atac web reale:
+
+| Semnătură ET/GPL | Count | Tip |
+|---|---|---|
+| ET WEB_SERVER Generic PHP Remote File Include | 28 | RFI |
+| ET WEB_SERVER PHP tags in HTTP POST | 28 | PHP code injection |
+| ET WEB_SERVER PHP.//Input in HTTP POST | 28 | PHP wrapper |
+| ET WEB_SERVER allow_url_include PHP config option in uri | 28 | RFI/LFI |
+| ET WEB_SERVER auto_prepend_file PHP config option in uri | 28 | RFI/LFI |
+| ET HUNTING Suspicious PHP Code in HTTP POST (Out/In) | 22 / 21 | code injection |
+| ET WEB_SERVER Possible SQL Injection (exec) in HTTP Request Body | 20 | SQLi |
+| ET WEB_SERVER Possible SQL Injection UNION SELECT in HTTP Request Body | 20 | SQLi (NOU vs baseline) |
+| ET WEB_SERVER PHP Possible php RFI Attempt | 7 | RFI |
+| ET WEB_SERVER Tilde in URI - potential .php~ source disclosure | 3 | source disclosure |
+| GPL WEB_SERVER 403 Forbidden / .htaccess access | 10 / 8 | recon (NOU — reguli GPL) |
+| ET INFO Proxy TRACE / Dotted Quad ZIP / Hidden .env / Spring Boot Actuator / python-requests UA | 57 / 18 / 7 / 4 / 4 | scanner fingerprint + probe-uri config |
+
+  Plus anomaly engine: HTTP excessive header repetition ×173, unable to match response ×77, STREAM
+  anomalies. src/dest: ZAP `10.1.247.63` ↔ DVWA `10.1.139.66` (389/350 pe direcție).
+- **Falco:** `zap-scan` pod = **8** (Drop&execute pe procesele java/python ale scanner-ului); **DVWA = 0**
+  (orb la atacul web neautentificat — demarcația structurală rămâne). **Zgomotul de background
+  `prometheus` (Secret Access / Sensitive File Read) NU mai apare** în query-ul pe pod — fix-ul de FP
+  observability (helm rev 27/28) ține; query-ul Falco a fost curat (doar `zap-scan-qb7jb`).
+- Concluzia centrală e neschimbată și mai puternică: **Suricata atribuie tipul de atac** (SQLi UNION
+  SELECT/exec, PHP RFI, source disclosure), nu doar „ceva anormal". Numărul de semnături variază run-to-run
+  cu versiunea ZAP + reasamblarea, dar familia (SQLi + PHP RFI + code injection) e stabilă.
 
 ## Rezultate finale (rulare 2026-05-31, **după** fix-ul HOME_NET — iterația B aplicată)
 
