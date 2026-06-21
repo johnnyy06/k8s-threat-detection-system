@@ -169,3 +169,15 @@ infrastructure/ansible/group_vars/all.yml
 infrastructure/ansible/inventories/hosts.ini
 
 CLAUDE.md
+docs/obs
+
+# ---------------------------
+# Datasets & ML (ml-ids) — mutat din ml-ids/.gitignore (2026-06-15)
+# Datele brute (~4GB) NU se comit; se descarca de la CIC (vezi ml-ids/DATASETS.md).
+# Codul (train_rf.py, requirements.txt, DATASETS.md) + ploturile reports/ SE comit.
+# ---------------------------
+ml-ids/CIC-IDS2017
+ml-ids/CIC-UNSW-NB15
+ml-ids/data/
+ml-ids/.venv/
+ml-ids/models/*.joblib
