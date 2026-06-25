@@ -6,7 +6,7 @@ Surse versionate pentru lucrările grafice (Cap B/C — arhitectură, fluxuri, i
 | Fișier | Tool | Conține |
 |---|---|---|
 | `architecture.drawio` | **draw.io** | Schelet arhitectură 4-noduri (de rafinat: layout + icoane oficiale) |
-| `flows.md` | **Mermaid** | 1) blueprint arhitectură · 2) flux colectare loguri+alertare · 3) interconectare IDS/Falco/ELK pe straturi · 4) secvență atac→detecție→răspuns · 5) pipeline metrici Prometheus+Grafana (pull-based) |
+| `flows.md` | **Mermaid** | 1) blueprint arhitectură · 2) flux colectare loguri+alertare · 3) interconectare IDS/Falco/ELK pe straturi · 4) secvență atac→detecție→răspuns · 5) pipeline AI/ML (RandomForest → security-ml-*, comparație determinist↔ML) · 6) pipeline metrici Prometheus+Grafana (pull-based) |
 
 ## draw.io — cum lucrezi
 - **VSCode:** instalează extensia *Draw.io Integration* (`hediet.vscode-drawio`) → deschizi `architecture.drawio` direct, editezi vizual, se salvează ca XML (version-controllable).
@@ -25,7 +25,8 @@ Surse versionate pentru lucrările grafice (Cap B/C — arhitectură, fluxuri, i
 
 ## Convenții vizuale (păstrează-le consistente în toate diagramele)
 - 🟦 albastru = **Falco** (runtime/syscall) · 🟥 roșu = **Suricata** (network IDS) ·
-  🟩 verde = **ELK** (colectare/corelare) · 🟨 galben = **Falco Talon** (răspuns) · ⬜ alb = workload/țintă.
+  🟩 verde = **ELK** (colectare/corelare) · 🟨 galben = **Falco Talon** (răspuns) ·
+  🟪 mov = **ML/IDS** (RandomForest, strat exploratoriu Cap E) · ⬜ alb = workload/țintă.
 - Linie continuă = flux de loguri/alerte; linie punctată = acces/atac/notifier.
 - Pune mereu **legendă** + **IP-uri/porturi** reale (credibilitate tehnică).
 

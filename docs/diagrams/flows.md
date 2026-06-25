@@ -6,7 +6,7 @@ Surse text pentru diagramele tezei. Se randează nativ în GitHub și în VSCode
 
 Convenții de culoare:
 - 🟦 Falco (runtime/syscall) · 🟥 Suricata (network IDS) · 🟩 ELK (colectare/corelare) ·
-  🟨 Falco Talon (răspuns) · ⬜ workload-uri/ținte.
+  🟨 Falco Talon (răspuns) · 🟪 ML/IDS (RandomForest, strat exploratoriu Cap E) · ⬜ workload-uri/ținte.
 
 ---
 
@@ -30,6 +30,7 @@ flowchart TB
       n2s["Suricata (systemd) — sensor ens3"]
       n2fs["falcosidekick (router)"]
       n2a["attack-pod (sursă atac)"]
+      n2ml["ml-infer (Deployment, ns ml-ids)<br/>inferență ML live (RandomForest)"]
     end
 
     subgraph N3["node-3 · 10.11.0.70 — worker aplicații (senzor Suricata)"]
@@ -59,15 +60,19 @@ flowchart TB
   n2fs --> n4t
   admin -. "10.102.14.31:9200/:5601" .-> ELK
   n2a -. "atac" .-> n3d
+  es -. "flow-uri (read-only)" .-> n2ml
+  n2ml -. "predicții → security-ml-*" .-> es
 
   classDef falco fill:#cfe2ff,stroke:#1e40af;
   classDef suri fill:#ffd6d6,stroke:#991b1b;
   classDef elk fill:#d1fae5,stroke:#065f46;
   classDef talon fill:#fef3c7,stroke:#92400e;
+  classDef ml fill:#ede9fe,stroke:#6d28d9;
   class n1f,n2f,n3f,n4f falco;
   class n2s,n3s suri;
   class ls,es,kb elk;
   class n4t talon;
+  class n2ml ml;
 ```
 
 ---
@@ -185,7 +190,48 @@ sequenceDiagram
 
 ---
 
-## 5. Pipeline metrici (Prometheus + Grafana) — planul secundar de observabilitate
+## 5. Pipeline AI/ML — strat exploratoriu de detecție (Cap E)
+
+> Strat **paralel și aditiv** peste pipeline-ul determinist: NU îl înlocuiește. Un model RandomForest
+> antrenat pe datele proprii ale clusterului scorează flow-urile Suricata live și scrie o a doua opinie
+> într-un index separat `security-ml-*`. Read-only pe `security-*` (nu atinge detecția deterministă).
+
+```mermaid
+flowchart LR
+  subgraph TRAIN["Antrenare (offline)"]
+    cic["Dataset-uri publice<br/>CIC-IDS2017 + CIC-UNSW-NB15<br/>(studiu domain-shift)"]
+    own["Date proprii cluster<br/>flow-uri Suricata etichetate<br/>(collect_cluster_data.py)"]
+    model["🟪 RandomForest<br/><b>rf_cluster.joblib</b><br/>features native EVE · F1 0.986"]
+    cic -.->|"baseline + domain-shift (F1→0.0001 cross)"| model
+    own -->|"antrenare self-consistent (fără domain-shift)"| model
+  end
+
+  subgraph LIVE["Inferență live (în cluster)"]
+    es["🟩 Elasticsearch<br/>security-* (event_type=flow + alert)"]
+    ml["🟪 ml-infer — Deployment node-2 (ns ml-ids)<br/>infer_live.py --watch (poll 30s)<br/>scorează + corelează pe flow_id"]
+    mlidx["🟪 Elasticsearch<br/>index paralel <b>security-ml-*</b><br/>ml_label · detection: both/ml_only/rule_only/quiet"]
+    kb["🟩 Kibana — dashboard 05<br/>comparație determinist ↔ ML"]
+  end
+
+  model -->|"copt în imagine"| ml
+  es -->|"PULL read-only<br/>flow-uri + alerte (corelare)"| ml
+  ml -->|"predicții (write)"| mlidx --> kb
+
+  classDef elk fill:#d1fae5,stroke:#065f46;
+  classDef ml fill:#ede9fe,stroke:#6d28d9;
+  class es,kb elk;
+  class model,ml,mlidx ml;
+```
+
+**Idee cheie de subliniat în teză:** stratul ML completează detecția deterministă, nu o înlocuiește.
+Corelarea pe `flow_id` clasifică fiecare flux în `both` (acord ML + semnătură Suricata), `ml_only`
+(candidat de detecție nouă, ratat de semnături), `rule_only` (ratat de ML) sau `quiet`. Modelul antrenat
+pe **datele proprii** (features native EVE) generalizează pe mediul său (F1 0.986), pe când transferul
+între dataset-uri publice colapsează (domain-shift, F1 0.0001) — argumentul „antrenează pe datele tale".
+
+---
+
+## 6. Pipeline metrici (Prometheus + Grafana) — planul secundar de observabilitate
 
 > Separat de pipeline-ul de securitate. Diferența-cheie: metricile sunt **PULL** (Prometheus face
 > *scrape* periodic pe `/metrics`), spre deosebire de telemetria de securitate (Falco/Suricata) care e

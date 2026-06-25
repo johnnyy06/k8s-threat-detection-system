@@ -1,0 +1,58 @@
+# Deployment pentru pipeline-ul ML live (infer_live.py --watch) in-cluster.
+# Varianta "live in-cluster" a integrarii ML din Cap E. Echivalenta functional cu rularea
+# scriptului pe laptop; aduce: always-on, self-healing (K8s reporneste pod-ul), path direct
+# spre ES intern (10.11.0.3, fara floating IP/NAT), si declarativitate (in repo, ca Falco/Talon).
+#
+# Read-only pe pipeline-ul existent (interogheaza security-*), scrie doar in security-ml-*.
+# Necesita imaginea ml-infer:latest sideload-ata pe nodul tinta (vezi README.md - cluster fara registry).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-ids
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-infer
+  namespace: ml-ids
+  labels:
+    app: ml-infer
+    component: ml-ids
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-infer
+  template:
+    metadata:
+      labels:
+        app: ml-infer
+        component: ml-ids
+    spec:
+      # Pod-ul e un client ES (citeste/scrie node-4 prin retea) - plasarea e neutra fata de
+      # fluxul de date (NU depinde de senzorul Suricata local). Ales node-2: cel mai mult headroom
+      # in steady-state (attack-pod e idle in repaus), lasa aplicatiile-tinta de pe node-3
+      # (DVWA/Juice Shop) neimpactate. NU node-1 (dqlite bottleneck), NU node-4 (co-locare analytics
+      # cu ELK = anti-pattern). Load-ul greu de pe node-2 (ZAP) e tranzitoriu/la cerere.
+      nodeSelector:
+        kubernetes.io/hostname: node-2
+      containers:
+        - name: ml-infer
+          # Ref cu prefix localhost/ - deterministic la sideload: si docker si podman pastreaza
+          # exact acest nume in containerd dupa `microk8s ctr image import` (build cu -t localhost/...).
+          image: localhost/ml-infer:latest
+          imagePullPolicy: Never          # imagine sideload-ata local, NU se trage din registry
+          env:
+            - name: ES_URL
+              value: "http://10.11.0.3:9200"   # IP intern node-4 (ELK), reachable din pod
+            - name: PYTHONUNBUFFERED
+              value: "1"                        # stdout nebufferat -> log-urile "scorate N..." vizibile live
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"   # pandas+sklearn RSS ~300-400MB
+      restartPolicy: Always

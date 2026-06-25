@@ -182,3 +182,6 @@ ml-ids/CIC-UNSW-NB15
 ml-ids/data/
 ml-ids/.venv/
 ml-ids/models/*.joblib
+
+thesis-1.pdf
+thesis/

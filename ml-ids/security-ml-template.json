@@ -1,0 +1,28 @@
+{
+  "index_patterns": ["security-ml-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_replicas": 0,
+      "number_of_shards": 1
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "flow_id":    { "type": "keyword" },
+        "node":       { "type": "keyword" },
+        "src_ip":     { "type": "ip" },
+        "dest_ip":    { "type": "ip" },
+        "src_port":   { "type": "integer" },
+        "dest_port":  { "type": "integer" },
+        "proto":      { "type": "keyword" },
+        "app_proto":  { "type": "keyword" },
+        "ml_score":     { "type": "float" },
+        "ml_label":     { "type": "keyword" },
+        "rule_alerted": { "type": "boolean" },
+        "detection":    { "type": "keyword" },
+        "model":        { "type": "keyword" }
+      }
+    }
+  }
+}

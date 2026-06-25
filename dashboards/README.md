@@ -1,6 +1,6 @@
 # Kibana Dashboards — Thesis K8s Threat Detection
 
-4 dashboards complementare, fiecare răspunzând la o întrebare distinctă pentru investigarea amenințărilor în clusterul K8s. Sursa de date este indexul unificat `security-*` cu schema ECS (Elastic Common Schema), populată de Logstash din webhook-uri Falco și fișierele EVE JSON Suricata.
+5 dashboards complementare, fiecare răspunzând la o întrebare distinctă pentru investigarea amenințărilor în clusterul K8s. Sursa de date pentru 01-04 este indexul unificat `security-*` cu schema ECS (Elastic Common Schema), populată de Logstash din webhook-uri Falco și fișierele EVE JSON Suricata. Dashboard 05 (ML, Cap E) folosește indexul paralel `security-ml-*`.
 
 ## Lista dashboard-urilor
 
@@ -10,6 +10,7 @@
 | 02 | [02-mitre/](02-mitre/) | `thesis-mitre-attck-coverage` | "Care tehnici MITRE ATT&CK sunt acoperite de regulile mele?" |
 | 03 | [03-cross-tool/](03-cross-tool/) | `thesis-cross-tool-correlation` | "Cum se completează Falco și Suricata reciproc?" |
 | 04 | [04-per-scenario/](04-per-scenario/) | `thesis-per-scenario-investigation` | "Ce a detectat sistemul pentru un scenariu de atac specific?" |
+| 05 | [05-ml-comparison/](05-ml-comparison/) | `thesis-ml-vs-deterministic` | "Ce aduce stratul ML (Cap E) față de detecția deterministă?" |
 
 Acces direct: `${KIBANA_URL}/app/dashboards#/view/<slug>` (de pe laptop prin floating IP).
 

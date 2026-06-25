@@ -1,0 +1,12 @@
+# Dependinte DOAR pentru inferenta live (infer_live.py ca Deployment in-cluster).
+# Subset din requirements.txt - fara matplotlib/seaborn/pillow (alea-s pt training/ploturi).
+# scikit-learn FIXAT la versiunea cu care a fost serializat rf_cluster.joblib (1.9.0) -
+# altfel joblib.load da InconsistentVersionWarning sau esueaza la unpickle.
+joblib==1.5.3
+numpy==2.4.6
+pandas==3.0.3
+scikit-learn==1.9.0
+scipy==1.17.1
+threadpoolctl==3.6.0
+python-dateutil==2.9.0.post0
+six==1.17.0

@@ -40,8 +40,11 @@ CSV_COLS = ["flow_id","node","label","scenario",
             "tcp_syn","tcp_ack","tcp_psh","tcp_fin","tcp_rst","tcp_urg"]
 
 def es_post(path, body):
+    # User-Agent explicit: altfel urllib trimite "Python-urllib/3.x" pe care Suricata il marcheaza
+    # "ET INFO Python-urllib Suspicious User Agent" => zgomot recurent in security-* de la pod-ul ML.
     req = urllib.request.Request(ES+path, data=json.dumps(body).encode(),
-                                 headers={"Content-Type":"application/json"}, method="POST")
+                                 headers={"Content-Type":"application/json",
+                                          "User-Agent":"ml-ids-infer/1.0"}, method="POST")
     return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
 def es_scroll(query):
