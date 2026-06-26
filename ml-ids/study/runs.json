@@ -1,0 +1,8 @@
+{
+  "baseline":  {"start": "2026-06-26T07:07:34Z", "end": "2026-06-26T07:11:35Z"},
+  "scenarios": [
+    {"id": "s05", "name": "network-scanning", "attacker_ip": "10.1.247.59", "start": "2026-06-26T07:11:35Z", "end": "2026-06-26T07:12:38Z"},
+    {"id": "s11", "name": "lateral-movement", "attacker_ip": "10.1.247.59", "start": "2026-06-26T07:13:08Z", "end": "2026-06-26T07:14:10Z"},
+    {"id": "s09", "name": "owasp-zap",        "attacker_ip": "10.1.247.48",        "start": "2026-06-26T07:15:45Z", "end": "2026-06-26T07:23:48Z"}
+  ]
+}
