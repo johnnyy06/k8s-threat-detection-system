@@ -66,9 +66,28 @@ Chroot Usage` ×9 (nsenter ×4, chroot ×1, unshare ×4), `Container Escape - Se
 `Read sensitive file untrusted` ×1 (host `/etc/shadow`, epoch `19998`). Niciun set FIM nou (rev 30) nu
 s-a declanșat (escape-ul nu scrie în `/etc` sau binar dirs — doar citește).
 
+## Strat API/admission — k8saudit (2026-06-27)
+
+Activat stratul de detecție la **nivel Kubernetes API/audit** (plugin Falco `k8saudit`), care prinde
+exact **pasul 1** (deploy-ul pod-ului privilegiat) — acțiune pe care Falco syscall nu o poate vedea.
+La crearea escape-pod-ului, k8saudit declanșează **4 reguli distincte de admission**:
+
+| Regulă k8saudit | Cauză (config pod) |
+|---|---|
+| Create Privileged Pod | `securityContext.privileged: true` |
+| Create Sensitive Mount Pod | `hostPath: /` (+ socket containerd) |
+| Create HostNetwork Pod | `hostNetwork: true` |
+| Create HostPid Pod | `hostPID: true` |
+
+`event.provider: k8s_audit`, prioritate Warning, în indexul unificat `security-*` (8 evenimente brute =
+4 reguli × 2 — duplicarea ×2 e un artefact al pipeline-ului falcosidekick, nu reflectă atacul). Astfel
+**gap-ul "deploy nedetectat" de la Observații #1 este închis în soluție**: escape-pod-ul e prins acum
+ȘI la admission (configurația greșită), ȘI la runtime (pașii 2-6). Arhitectură: kube-apiserver audit
+log → audit-forwarder → plugin k8saudit → falcosidekick → Logstash. Detalii: `falco-k8saudit/README.md`.
+
 ## Observații așteptate (de validat)
 
-1. **Deployment-ul escape-pod-ului (pasul 1) — nedetectat de Falco** — la fel ca la scenariul 8: crearea unui pod privilegiat e o acțiune K8s API; regulile `Launch Privileged Container`/`Launch Sensitive Mount Container` nu sunt active, `k8saudit` nu e activat. Falco prinde *consecințele* (pașii 2-6), nu *configurația greșită* care le permite. **Lecție**: defense in depth cere și un layer de policy/admission (Cap 6) — analiză detaliată + mapare pe scenarii în `docs/admission-control-recommendation.md`.
+1. **Deployment-ul escape-pod-ului (pasul 1) — [ÎNCHIS 2026-06-27 via k8saudit]** — crearea unui pod privilegiat e o acțiune K8s API pe care Falco *syscall* nu o vede (prinde doar *consecințele*, pașii 2-6). Inițial era un gap (`k8saudit` neactivat); **acum e detectat la admission** de stratul k8saudit (vezi secțiunea "Strat API/admission" de mai sus — 4 reguli pe configurația greșită). **Lecție rămasă**: detecția la admission ≠ *prevenție* — un layer de policy/admission (PSA/OPA, Cap 6) ar *bloca* deploy-ul, nu doar să-l alerteze; analiză în `docs/admission-control-recommendation.md`.
 
 2. **Path matching depinde de cum e montat host-ul** — regula `Sensitive Mount Access` verifică `fd.name startswith /run/containerd/containerd.sock` etc. Funcționează doar dacă path-ul în container coincide cu cel de pe host. Am montat socket-ul exact la `/run/containerd/containerd.sock` (nu la `/host/run/...`) tocmai ca regula să facă match — un atacator care montează host-ul la un prefix arbitrar (`/host`, `/mnt`) ar evita match-ul pe path. Citirea `/host/etc/shadow` (prefix `/host`) NU declanșează `Sensitive File Read` (regula verifică `fd.name = /etc/shadow` exact). **Limitare structurală**: regulile bazate pe path absolut nu acoperă mount-uri la prefixe arbitrare. `chroot /host` apoi `/etc/shadow` ESTE prins pentru că chroot schimbă rezoluția de path → kernel-ul vede `/etc/shadow`.
 

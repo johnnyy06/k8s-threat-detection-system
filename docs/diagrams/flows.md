@@ -5,8 +5,9 @@ Surse text pentru diagramele tezei. Se randează nativ în GitHub și în VSCode
 <https://mermaid.live>, sau `mmdc -i flows.md -o out.svg` (mermaid-cli), și exportă **SVG/PDF**.
 
 Convenții de culoare:
-- 🟦 Falco (runtime/syscall) · 🟥 Suricata (network IDS) · 🟩 ELK (colectare/corelare) ·
-  🟨 Falco Talon (răspuns) · 🟪 ML/IDS (RandomForest, strat exploratoriu Cap E) · ⬜ workload-uri/ținte.
+- 🟦 Falco (runtime/syscall) · 🟧 Falco k8saudit (API/audit) · 🟥 Suricata (network IDS) ·
+  🟩 ELK (colectare/corelare) · 🟨 Falco Talon (răspuns) · 🟪 ML/IDS (RandomForest, strat exploratoriu Cap E) ·
+  ⬜ workload-uri/ținte.
 
 ---
 
@@ -23,6 +24,8 @@ flowchart TB
     subgraph N1["node-1 · 10.11.0.249 — control-plane"]
       n1f["Falco DaemonSet"]
       n1d["dqlite (API server store)"]
+      n1audit["kube-apiserver → audit.log"]
+      n1fwd["audit-forwarder (Deployment)<br/>tail -f → webhook"]
     end
 
     subgraph N2["node-2 · 10.11.0.214 — worker (senzor Suricata)"]
@@ -42,6 +45,7 @@ flowchart TB
     subgraph N4["node-4 · 10.11.0.3 — monitoring (floating IP 10.102.14.31)"]
       n4f["Falco DaemonSet"]
       n4t["Falco Talon (răspuns)"]
+      n4ka["Falco k8saudit (Deployment)<br/>plugin k8saudit — detecție API/admission"]
       subgraph ELK["ELK — systemd, ÎN AFARA K8s"]
         ls["Logstash :5044/:5045"]
         es["Elasticsearch :9200"]
@@ -58,17 +62,20 @@ flowchart TB
   n2fs --> ls
   ls --> es --> kb
   n2fs --> n4t
+  n1audit --> n1fwd --> n4ka --> n2fs
   admin -. "10.102.14.31:9200/:5601" .-> ELK
   n2a -. "atac" .-> n3d
   es -. "flow-uri (read-only)" .-> n2ml
   n2ml -. "predicții → security-ml-*" .-> es
 
   classDef falco fill:#cfe2ff,stroke:#1e40af;
+  classDef k8saudit fill:#ffedd5,stroke:#c2410e;
   classDef suri fill:#ffd6d6,stroke:#991b1b;
   classDef elk fill:#d1fae5,stroke:#065f46;
   classDef talon fill:#fef3c7,stroke:#92400e;
   classDef ml fill:#ede9fe,stroke:#6d28d9;
   class n1f,n2f,n3f,n4f falco;
+  class n4ka,n1fwd,n1audit k8saudit;
   class n2s,n3s suri;
   class ls,es,kb elk;
   class n4t talon;
@@ -83,9 +90,12 @@ flowchart TB
 flowchart LR
   subgraph SRC["Surse de detecție (în cluster)"]
     falco["🟦 Falco DaemonSet<br/>(syscall/runtime, toate nodurile)"]
+    ka["🟧 Falco k8saudit<br/>(plugin API/admission)"]
     suri["🟥 Suricata systemd<br/>(node-2 + node-3, EVE JSON)"]
   end
 
+  api["kube-apiserver → audit.log<br/>(node-1)"]
+  fwd["audit-forwarder<br/>(tail -f → webhook)"]
   fs["falcosidekick<br/>(router alerte Falco)"]
   fb["Filebeat<br/>(sidecar/agent eve.json)"]
 
@@ -96,21 +106,27 @@ flowchart LR
   end
 
   falco -->|"webhook JSON"| fs -->|"HTTP :5045"| ls
+  api --> fwd -->|"EventList POST"| ka -->|"webhook JSON"| fs
   suri -->|"eve.json"| fb -->|"Beats :5044"| ls
-  ls -->|"tags: falco / suricata"| es --> kb
+  ls -->|"tags: falco / suricata<br/>event.provider: k8s_audit"| es --> kb
 
   classDef falco fill:#cfe2ff,stroke:#1e40af;
+  classDef k8saudit fill:#ffedd5,stroke:#c2410e;
   classDef suri fill:#ffd6d6,stroke:#991b1b;
   classDef elk fill:#d1fae5,stroke:#065f46;
   class falco falco;
+  class ka,api,fwd k8saudit;
   class suri suri;
   class ls,es,kb elk;
 ```
 
-**Idee cheie de subliniat în teză:** ambele surse (host-based Falco + network-based Suricata) sunt
-normalizate de Logstash și aterizează în **același index `security-*`**, diferențiate prin câmpul
-`tags` → corelarea cross-tool se face în Kibana peste câmpuri comune (`@timestamp`,
-`k8s.pod.name`/`container.id`, `dest_ip`).
+**Idee cheie de subliniat în teză:** cele trei surse (host/syscall = Falco, network = Suricata,
+API/admission = Falco k8saudit) sunt normalizate de Logstash și aterizează în **același index
+`security-*`**, diferențiate prin `tags` (falco/suricata) și `event.provider` (`k8s_audit` pentru
+stratul de audit) → corelarea cross-tool se face în Kibana peste câmpuri comune (`@timestamp`,
+`k8s.pod.name`/`container.id`, `dest_ip`). k8saudit ajunge prin lanțul kube-apiserver → audit.log →
+audit-forwarder (`tail -f`) → webhook-ul plugin-ului (vezi `falco-k8saudit/README.md` pentru motivul
+forwarder-ului: `file://` follow și webhook-ul nativ al apiserver-ului nu funcționează pe kubelite).
 
 ---
 
@@ -121,10 +137,12 @@ flowchart TB
   subgraph L1["Strat 1 — Senzori (detecție)"]
     direction LR
     falco["🟦 <b>Falco</b><br/>runtime/syscall (eBPF)<br/>reguli K8S_THREAT + default"]
+    ka["🟧 <b>Falco k8saudit</b><br/>API/admission (plugin)<br/>reguli k8s_audit (Create Privileged Pod, ...)"]
     suri["🟥 <b>Suricata</b><br/>network IDS (AF_PACKET, VXLAN-decode)<br/>ET Open + reguli custom (sid 1000010-12)"]
   end
 
   subgraph L2["Strat 2 — Transport & normalizare"]
+    fwd["audit-forwarder<br/>(tail audit.log → webhook)"]
     fs["falcosidekick"]
     fb["Filebeat"]
     ls["Logstash (ECS)"]
@@ -140,6 +158,8 @@ flowchart TB
   end
 
   falco --> fs
+  ka -->|"webhook"| fs
+  fwd -->|"EventList"| ka
   suri --> fb --> ls
   fs --> ls --> es --> kb
   fs -->|"output: talon"| talon
@@ -147,10 +167,12 @@ flowchart TB
   talon -->|"ES notifier"| es
 
   classDef falco fill:#cfe2ff,stroke:#1e40af;
+  classDef k8saudit fill:#ffedd5,stroke:#c2410e;
   classDef suri fill:#ffd6d6,stroke:#991b1b;
   classDef elk fill:#d1fae5,stroke:#065f46;
   classDef talon fill:#fef3c7,stroke:#92400e;
   class falco falco;
+  class ka,fwd k8saudit;
   class suri suri;
   class es,kb,ls elk;
   class talon talon;
@@ -262,6 +284,44 @@ flowchart LR
 spre Logstash → ES → Kibana; aici Prometheus *trage* (pull) metrici de pe endpoint-uri, le stochează în
 TSDB-ul propriu și Grafana le interoghează cu PromQL. Două planuri de observabilitate distincte, cu
 modele de colectare opuse.
+
+---
+
+## 7. Secvență — detecție la nivel API/admission (k8saudit, ex: deploy pod privileged)
+
+> Stratul k8saudit prinde exact ce Falco syscall NU poate vedea: cererea către API server.
+> Acoperă gap-ul documentat la scenariile **01 (container-escape)** și **08 (malicious-deployment)**,
+> unde pasul „deploy pod privileged" nu producea nicio detecție.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Atacator (kubectl / SA)
+    participant API as kube-apiserver (node-1)
+    participant LOG as audit.log (node-1)
+    participant FWD as audit-forwarder
+    participant KA as Falco k8saudit
+    participant S as falcosidekick
+    participant L as Logstash
+    participant E as Elasticsearch
+    participant K as Kibana
+
+    A->>API: kubectl apply pod privileged (escape-pod / malicious-pod)
+    Note over API: cererea de admission — INVIZIBILĂ pentru Falco syscall
+    API->>LOG: scrie eveniment audit (RequestResponse, spec-ul pod-ului)
+    FWD->>LOG: tail -f
+    FWD->>KA: POST EventList (webhook :9765)
+    KA->>KA: regulă "Create Privileged Pod" (k8s_audit)
+    KA->>S: alertă (webhook JSON)
+    S->>L: HTTP :5045
+    L->>E: index security-* (event.provider: k8s_audit)
+    E->>K: vizibil în dashboard
+```
+
+**Idee cheie de subliniat în teză:** detecția la admission e complementară celei la runtime. Un pod
+privileged e prins de k8saudit la **crearea** lui (înainte/independent de orice syscall din container),
+pe când Falco syscall l-ar prinde doar dacă/ce execută înăuntru. Cele trei straturi (API, host, network)
+văd momente diferite ale aceluiași atac.
 
 ---
 

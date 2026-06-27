@@ -84,6 +84,11 @@ falco:
   load_plugins: [k8saudit, json]
   json_output: true
   json_include_output_property: true
+  # Fire ALL matching rules per audit event (default is 'first', which would let
+  # only "Create Privileged Pod" fire on an escape-pod and suppress the
+  # overlapping "Create Sensitive Mount Pod" / "Create HostNetwork Pod" /
+  # "Create HostPid Pod" - same defense-in-depth reason as the syscall Falco.
+  rule_matching: all
 
 # Route events to the SAME Logstash as the syscall Falco.
 # The webhook address itself comes from the shared local-values.yaml overlay.

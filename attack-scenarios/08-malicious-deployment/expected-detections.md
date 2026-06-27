@@ -77,9 +77,27 @@ path-urile `ld.so` la `ld.so.preload`/`ld.so.conf`). **FP-ul vechi `frontend`/`/
 `Write Below Binary Dir` pe `/usr/bin/curl` — `dpkg` e în `package_mgmt_binaries`, deci scrierea binarului
 de pachet e corect allowlist-ată; doar `ldconfig` scapă.
 
+## Strat API/admission — k8saudit (2026-06-27)
+
+Activat stratul de detecție la **nivel Kubernetes API/audit** (plugin Falco `k8saudit`), care prinde
+exact **pasul 1** (deploy-ul `malicious-pod`) — acțiunea K8s API pe care Falco syscall nu o vede. La
+crearea pod-ului, k8saudit declanșează **3 reguli distincte de admission**:
+
+| Regulă k8saudit | Cauză (config pod) |
+|---|---|
+| Create Privileged Pod | `securityContext.privileged: true` |
+| Create Sensitive Mount Pod | `hostPath: /` |
+| Create HostPid Pod | `hostPID: true` |
+
+(Fără `Create HostNetwork Pod` — `malicious-pod` nu cere `hostNetwork`, spre deosebire de escape-pod-ul
+s01.) `event.provider: k8s_audit`, prioritate Warning, index unificat `security-*` (6 evenimente brute =
+3 reguli × 2 — duplicarea ×2 e un artefact al pipeline-ului falcosidekick). **Gap-ul "deployment
+nedetectat" de la Observații #1 este închis în soluție**: `malicious-pod` e prins acum ȘI la admission
+(configurația greșită), ȘI la runtime (pașii 2-5). Detalii: `falco-k8saudit/README.md`.
+
 ## Observații așteptate (de validat)
 
-1. **Detecția deployment-ului în sine — NU se face (limitare confirmată)** — pasul 1 (deploy pod privilegiat) e o acțiune la nivel de K8s API, nu un syscall în pod-ul atacatorului. _Stratul de prevenție lipsă (admission control: PSA/Kyverno) e analizat în `docs/admission-control-recommendation.md` (material Cap 6) — acolo se arată cum `malicious-pod.yaml` ar fi respins la creare._ Regulile default `Launch Privileged Container` / `Launch Sensitive Mount Container` **nu sunt active** în acest ruleset Falco (0 hits all-time; nu apar în `falco -L`) — în Falco modern aceste reguli au fost mutate la `maturity: incubating`/`sandbox` și nu se încarcă în profilul default. Plugin-ul `k8saudit` (care ar prinde `CREATE pod` cu `privileged:true` din audit log-ul K8s API) **nu e activat** pe acest cluster. **Concluzie pentru Cap 6**: detecția deployment-urilor malițioase necesită un layer de admission control (OPA/Gatekeeper, Kyverno) sau audit-logging (`k8saudit` plugin) — out of scope pentru un PoC Falco(runtime)+Suricata(network). Falco prinde **consecințele** rulării unui container malițios (pașii 2-5), nu **actul** de a-l crea. Aceasta e o demarcație importantă a perimetrului soluției.
+1. **Detecția deployment-ului — [ÎNCHIS 2026-06-27 via k8saudit]; *prevenția* — încă lipsește** — pasul 1 (deploy pod privilegiat) e o acțiune la nivel de K8s API, nu un syscall în pod-ul atacatorului, deci Falco *syscall* prinde doar **consecințele** (pașii 2-5), nu **actul** de creare. Inițial acesta era un gap (regulile default `Launch Privileged Container` / `Launch Sensitive Mount Container` nu sunt active — mutate la `maturity: incubating`/`sandbox` în Falco modern; iar plugin-ul `k8saudit` nu era activat). **Acum `k8saudit` e activat** și prinde `CREATE pod` cu `privileged:true`/`hostPath`/`hostPID` direct din audit log-ul K8s API (vezi secțiunea "Strat API/admission" — 3 reguli). **Lecție rămasă pentru Cap 6**: detecția la admission ≠ *prevenție* — `k8saudit` *alertează* asupra deployment-ului malițios, dar nu-l *blochează*; pentru blocare e nevoie de admission control (OPA/Gatekeeper, Kyverno sau Pod Security Admission), analizat în `docs/admission-control-recommendation.md` (acolo se arată cum `malicious-pod.yaml` ar fi respins la creare).
 
 2. **`Binary Downloaded and Executed` — pattern comportamental robust** — prinde lanțul clasic "download → chmod → execute" indiferent de natura payload-ului (regula se uită la *locația* `/tmp`–`/dev/shm` + actul de a face executabil / a rula din ele, nu la conținut). Complementează `Drop and execute new binary` (care se uită la ctime vs container start).
 
