@@ -90,8 +90,9 @@ crearea pod-ului, k8saudit declanșează **3 reguli distincte de admission**:
 | Create HostPid Pod | `hostPID: true` |
 
 (Fără `Create HostNetwork Pod` — `malicious-pod` nu cere `hostNetwork`, spre deosebire de escape-pod-ul
-s01.) `event.provider: k8s_audit`, prioritate Warning, index unificat `security-*` (6 evenimente brute =
-3 reguli × 2 — duplicarea ×2 e un artefact al pipeline-ului falcosidekick). **Gap-ul "deployment
+s01.) `event.provider: k8s_audit`, prioritate Warning, index unificat `security-*` (**3 evenimente, 1 per
+regulă** — după revert-ul căii de livrare redundante webhook din 2026-06-27; înainte apăreau ×2 din dubla
+livrare forwarder + webhook nativ). **Gap-ul "deployment
 nedetectat" de la Observații #1 este închis în soluție**: `malicious-pod` e prins acum ȘI la admission
 (configurația greșită), ȘI la runtime (pașii 2-5). Detalii: `falco-k8saudit/README.md`.
 

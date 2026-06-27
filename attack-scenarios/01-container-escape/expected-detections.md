@@ -79,8 +79,9 @@ La crearea escape-pod-ului, k8saudit declanșează **4 reguli distincte de admis
 | Create HostNetwork Pod | `hostNetwork: true` |
 | Create HostPid Pod | `hostPID: true` |
 
-`event.provider: k8s_audit`, prioritate Warning, în indexul unificat `security-*` (8 evenimente brute =
-4 reguli × 2 — duplicarea ×2 e un artefact al pipeline-ului falcosidekick, nu reflectă atacul). Astfel
+`event.provider: k8s_audit`, prioritate Warning, în indexul unificat `security-*` (**4 evenimente, 1 per
+regulă** — după revert-ul căii de livrare redundante webhook din 2026-06-27; înainte apăreau ×2 fiindcă
+forwarder-ul ȘI webhook-ul nativ livrau fiecare același eveniment). Astfel
 **gap-ul "deploy nedetectat" de la Observații #1 este închis în soluție**: escape-pod-ul e prins acum
 ȘI la admission (configurația greșită), ȘI la runtime (pașii 2-6). Arhitectură: kube-apiserver audit
 log → audit-forwarder → plugin k8saudit → falcosidekick → Logstash. Detalii: `falco-k8saudit/README.md`.
