@@ -1,0 +1,76 @@
+# =============================================================================
+# audit-forwarder.yaml - bridges the apiserver audit LOG FILE to the Falco
+# k8saudit plugin's webhook listener.
+#
+# Why this exists: on this MicroK8s/kubelite cluster neither "native" live feed
+# worked - the k8saudit 0.18 file:// driver does not tail an appended hostPath
+# file, and the kube-apiserver audit *webhook* backend does not initialize on
+# the kubelite-embedded apiserver (flag present + config valid, but no webhook
+# metrics and no delivery). Both proven dead-ends (2026-06-27).
+#
+# What DOES work (proven): (1) apiserver reliably writes audit events to
+# /var/log/kubernetes/audit/audit.log per audit-policy.yaml; (2) Falco reads
+# that file correctly in batch mode (rules fire: Create Privileged Pod, ...);
+# (3) the k8saudit plugin's embedded webserver accepts POSTed EventLists.
+#
+# This forwarder stitches (1)+(3): it tails the audit log and POSTs each event
+# (wrapped in an EventList) to the plugin's webhook Service. Result: live
+# API/admission detection, fully decoupled from apiserver health (apiserver just
+# writes a file), surviving Falco/forwarder restarts.
+#
+# Runs as root (audit.log is 0600 root) and on node-1 (where the file lives).
+# Rotation note: uses `tail -f` (BusyBox has no -F); with the minimal audit
+# policy the 50MB rotation threshold is never hit during a demo. If the log ever
+# rotates, restart this Deployment.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-forwarder
+  namespace: falco
+  labels:
+    app: audit-forwarder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-forwarder
+  template:
+    metadata:
+      labels:
+        app: audit-forwarder
+    spec:
+      # The audit log is a hostPath file on the control-plane node.
+      nodeSelector:
+        kubernetes.io/hostname: node-1
+      containers:
+        - name: forwarder
+          image: curlimages/curl:8.11.1
+          securityContext:
+            runAsUser: 0          # read the 0600 root-owned audit.log
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "audit-forwarder: tailing audit.log -> k8saudit webhook"
+              tail -n 0 -f /var/log/kubernetes/audit/audit.log | while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                printf '{"kind":"EventList","apiVersion":"audit.k8s.io/v1","items":[%s]}' "$line" | \
+                  curl -sS -o /dev/null --max-time 5 -X POST \
+                    -H 'Content-Type: application/json' --data-binary @- \
+                    http://falco-k8saudit-webhook.falco.svc.cluster.local:9765/k8s-audit || true
+              done
+          volumeMounts:
+            - name: audit-log
+              mountPath: /var/log/kubernetes/audit
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+      volumes:
+        - name: audit-log
+          hostPath:
+            path: /var/log/kubernetes/audit
+            type: Directory

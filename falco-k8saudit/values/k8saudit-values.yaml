@@ -1,0 +1,91 @@
+# =============================================================================
+# k8saudit-values.yaml - second Falco release = K8s API/audit detection layer.
+#
+# This is a PLUGIN-ONLY Falco instance (no kernel driver, no syscall capture).
+# It receives kube-apiserver audit events over a WEBHOOK (the apiserver POSTs
+# audit batches to the k8saudit plugin's embedded webserver) and feeds the SAME
+# ELK pipeline as the syscall Falco: falcosidekick -> Logstash:5045 -> security-*.
+#
+# Why webhook and not file:// : the k8saudit 0.18 file:// follow mode does not
+# tail an actively-appended hostPath file in this environment (it reads to EOF
+# at open and misses appends; batch/no-scheme read works but is one-shot).
+# Webhook is the canonical, reliable Falco k8saudit ingestion path. The apiserver
+# audit webhook is asynchronous/batched - a slow or down backend never blocks API
+# requests (events buffer then drop). We ALSO keep --audit-log-path on the
+# apiserver as an independent on-disk debug/backup trail (negligible cost with
+# the minimal audit-policy.yaml).
+#
+# Purpose (thesis): adds the API/admission detection layer the syscall Falco
+# structurally cannot see - closes the s01/s08 gap where "deploy a privileged
+# pod" produced NO detection. Defense-in-depth: host/syscall=Falco,
+# network=Suricata, API=k8saudit.
+#
+# Deploy together with the shared local-values.yaml (Logstash endpoint, gitignored):
+#   helm upgrade --install falco-k8saudit falcosecurity/falco -n falco \
+#     --version 8.0.2 -f values/k8saudit-values.yaml -f ../falco/config/local-values.yaml
+#
+# apiserver side (node-1): --audit-webhook-config-file -> http://127.0.0.1:30007/k8s-audit
+# (the NodePort below). See falco-k8saudit/README.md for the webhook kubeconfig.
+# =============================================================================
+
+# No kernel driver / no syscall collectors - this is a plugin-only instance.
+driver:
+  enabled: false
+collectors:
+  enabled: false
+
+# Single Deployment (one consumer of the apiserver audit stream), not a DaemonSet.
+controller:
+  kind: deployment
+  deployment:
+    replicas: 1
+
+# Expose the plugin webserver (container port 9765) as a NodePort so the
+# apiserver on node-1 can POST audit events to http://127.0.0.1:30007/k8s-audit.
+# kube-proxy routes the NodePort to the pod wherever it is scheduled.
+services:
+  - name: webhook
+    type: NodePort
+    ports:
+      - port: 9765
+        nodePort: 30007
+        protocol: TCP
+
+# Install the k8saudit plugin + its rules via falcoctl (json plugin ships in the image).
+falcoctl:
+  artifact:
+    install:
+      enabled: true
+    follow:
+      enabled: true
+  config:
+    artifact:
+      install:
+        refs: [k8saudit-rules:0, k8saudit:0]
+      follow:
+        refs: [k8saudit-rules:0]
+
+falco:
+  # Plugin-only ruleset: stock k8s audit rules + a rules.d dir for our future
+  # custom K8S_THREAT audit rules. NB: this REPLACES the default syscall
+  # rules_files (intentional - no syscall events here).
+  rules_files:
+    - /etc/falco/k8s_audit_rules.yaml
+    - /etc/falco/rules.d
+  plugins:
+    - name: k8saudit
+      library_path: libk8saudit.so
+      init_config: ""
+      # WEBHOOK mode: the plugin's embedded HTTP server listens on :9765/k8s-audit.
+      open_params: "http://:9765/k8s-audit"
+    - name: json
+      library_path: libjson.so
+      init_config: ""
+  load_plugins: [k8saudit, json]
+  json_output: true
+  json_include_output_property: true
+
+# Route events to the SAME Logstash as the syscall Falco.
+# The webhook address itself comes from the shared local-values.yaml overlay.
+falcosidekick:
+  enabled: true

@@ -1,0 +1,67 @@
+# =============================================================================
+# audit-policy.yaml - Kubernetes API server audit policy for the Falco
+# k8saudit plugin (thesis: API/admission detection layer).
+#
+# Design goal: MINIMAL disk write volume on node-1 (known dqlite/disk I/O
+# bottleneck) while still capturing the signal needed by the k8saudit threat
+# rules - most importantly the workload SPEC (RequestResponse) so that
+# privileged / hostPath / hostPID pods are detectable at admission time
+# (closes the s01 container-escape + s08 malicious-deployment gap where the
+# "deploy privileged pod" step was previously NOT detected: syscall-layer
+# Falco never sees a kubectl apply, only the API server does).
+#
+# Volume control: get/list/watch + leases + events + endpoints -> None
+# (these are >90% of audit volume and carry no detection value here).
+#
+# Deploy: copy to /var/snap/microk8s/current/args/audit-policy.yaml on node-1
+# and reference it from kube-apiserver via --audit-policy-file. See README.md.
+# =============================================================================
+apiVersion: audit.k8s.io/v1
+kind: Policy
+# Don't emit an event at request-receipt; one event per completed request is enough.
+omitStages:
+  - "RequestReceived"
+rules:
+  # --- Drop the high-frequency noise first (order matters: first match wins) ---
+
+  # Reads/watches are the bulk of audit volume and irrelevant for threat detection.
+  - level: None
+    verbs: ["get", "list", "watch"]
+
+  # Lease renewals (node heartbeats, leader election) - extremely chatty.
+  - level: None
+    resources:
+      - group: "coordination.k8s.io"
+        resources: ["leases"]
+
+  # Events / endpoints / endpointslices - high churn, low value.
+  - level: None
+    resources:
+      - group: ""
+        resources: ["events", "endpoints"]
+      - group: "discovery.k8s.io"
+        resources: ["endpointslices"]
+
+  # --- The signal: workload + RBAC writes WITH request body ---
+  # RequestResponse is required so the pod/workload SPEC is captured and the
+  # k8saudit rules can see privileged=true, hostPath, hostPID, hostNetwork, etc.
+  - level: RequestResponse
+    verbs: ["create", "update", "patch", "delete"]
+    resources:
+      - group: ""
+        resources: ["pods", "pods/exec", "pods/attach", "pods/portforward"]
+      - group: "apps"
+        resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+      - group: "batch"
+        resources: ["jobs", "cronjobs"]
+      - group: "rbac.authorization.k8s.io"
+        resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+
+  # --- Secrets / configmaps / serviceaccounts: metadata only (who/what, no payload) ---
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "configmaps", "serviceaccounts"]
+
+  # --- Everything else: drop (minimal-disk default) ---
+  - level: None
