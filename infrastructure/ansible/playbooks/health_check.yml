@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# PLAYBOOK: Health Check complet — fără modificări
+# PLAYBOOK: Health Check complet
 # =============================================================================
 # Verifică starea tuturor componentelor.
 # Util pentru diagnostic rapid după un incident sau restart.
@@ -72,17 +72,19 @@
   gather_facts: false
 
   tasks:
-    - name: Status Filebeat node-3
-      command: systemctl is-active filebeat
-      register: filebeat_status
+    - name: Status servicii node-3 (are ACUM si senzor Suricata)
+      command: "systemctl is-active {{ item }}"
+      loop: [suricata, filebeat]
+      register: node3_status
       changed_when: false
       failed_when: false
 
     - name: Raport node-3
       debug:
         msg:
-          - "=== NODE-3 (Application) ==="
-          - "Filebeat: {{ filebeat_status.stdout | upper }}"
+          - "=== NODE-3 (Application + senzor Suricata) ==="
+          - "Suricata: {{ node3_status.results[0].stdout | upper }}"
+          - "Filebeat: {{ node3_status.results[1].stdout | upper }}"
 
 - name: Health Check — Node-1 (Control Plane)
   hosts: control_plane

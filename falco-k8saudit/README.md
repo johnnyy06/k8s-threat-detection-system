@@ -1,23 +1,23 @@
-# falco-k8saudit - Kubernetes API / audit detection layer
+# falco-k8saudit - stratul de detecție la nivel Kubernetes API / audit
 
-A second, **plugin-only** Falco instance that detects threats at the **Kubernetes
-API / admission layer** (the `k8saudit` plugin), complementing the syscall Falco
-(host/runtime) and Suricata (network). Defense-in-depth:
+O a doua instanță Falco, **doar-plugin**, care detectează amenințări la nivelul
+**Kubernetes API / admission** (plugin-ul `k8saudit`), complementând Falco syscall
+(host/runtime) și Suricata (network). Defense-in-depth:
 
-| Layer | Tool | Sees |
-|-------|------|------|
-| host / syscall | `falco` DaemonSet | process exec, file, network syscalls |
-| network | Suricata (node-2/3) | packets, web-attack signatures |
-| **API / admission** | **`falco-k8saudit`** | **`kubectl apply`, privileged-pod creation, secret access, RBAC changes** |
+| Strat | Unealtă | Ce vede |
+|-------|---------|---------|
+| host / syscall | `falco` DaemonSet | exec de procese, fișiere, syscall-uri de rețea |
+| network | Suricata (node-2/3) | pachete, semnături de atac web |
+| **API / admission** | **`falco-k8saudit`** | **`kubectl apply`, creare pod privileged, acces la secrets, modificări RBAC** |
 
-**Why this matters:** the syscall Falco structurally cannot see a `kubectl apply`
-- only the API server does. Attack scenarios **01 (container-escape)** and **08
-(malicious-deployment)** documented this gap: the "deploy a privileged pod" step
-produced **no detection**. This layer closes it (`Create Privileged Pod`,
+**De ce contează:** Falco syscall nu poate vedea structural un `kubectl apply`
+- doar API server-ul îl vede. Scenariile de atac **01 (container-escape)** și **08
+(malicious-deployment)** au documentat acest gap: pasul "deploy pod privileged"
+nu producea **nicio detecție**. Acest strat îl închide (`Create Privileged Pod`,
 `Create Sensitive Mount Pod`, `Create HostPid/HostNetwork Pod`, `Attach/Exec Pod`,
-`K8s Secret Get`, RBAC-change rules, etc. - the stock `k8s_audit_rules.yaml`).
+`K8s Secret Get`, reguli de modificare RBAC etc. - setul stock `k8s_audit_rules.yaml`).
 
-## Architecture (as actually deployed)
+## Arhitectură
 
 ```
 kube-apiserver (node-1)
@@ -34,48 +34,50 @@ kube-apiserver (node-1)
                           Logstash :5045 --> Elasticsearch `security-*` --> Kibana
 ```
 
-Events land in the **unified `security-*` index**, tagged `falco` + `k8s`, and are
-distinguished from syscall-Falco by **`event.provider: k8s_audit`**.
+Evenimentele ajung în **indexul unificat `security-*`**, tag-uite `falco` + `k8s`, și
+se disting de Falco syscall prin **`event.provider: k8s_audit`**.
 
-### Why a forwarder and not a "native" transport
+### De ce un forwarder și nu un transport "nativ"
 
-Two canonical live-feed paths were tried and **both failed on this MicroK8s/kubelite
-cluster** (2026-06-27); the forwarder bridges the two parts that *do* work
-(apiserver writes the file reliably; the plugin's webhook server accepts EventLists):
+Două căi canonice de live-feed au fost încercate și **ambele au eșuat pe acest cluster
+MicroK8s/kubelite** (2026-06-27); forwarder-ul face puntea între cele două părți care
+*funcționează* (apiserver-ul scrie fișierul fiabil; webserver-ul webhook al plugin-ului
+acceptă EventList-uri):
 
-1. **`file://` plugin driver** (`open_params: file:///.../audit.log`): the k8saudit
-   0.18 driver does **not** tail an appended hostPath file - it reads to EOF at open
-   and misses subsequent appends. Batch/no-scheme read works but is one-shot.
-   (Proven: a one-shot `falco -o "plugins[0].open_params=/.../audit.log"` fired
-   `Create Privileged Pod` etc. on the existing file content.)
-2. **kube-apiserver audit webhook** (`--audit-webhook-config-file`): the webhook
-   backend does **not** initialize on the kubelite-embedded apiserver - flag present
-   and config valid, but no `apiserver_audit_webhook_*` metrics and zero delivery
-   (a 12-event burst produced 0 at the plugin). The `--audit-log-path` file backend
-   in the same args file works fine, so kubelite *does* read the args.
+1. **Driver-ul `file://` al plugin-ului** (`open_params: file:///.../audit.log`): driver-ul
+   k8saudit 0.18 **nu** face tail pe un fișier hostPath în care se scrie continuu - citește
+   până la EOF la deschidere și ratează append-urile ulterioare. Citirea batch/no-scheme
+   funcționează, dar e one-shot. (Dovedit: un `falco -o "plugins[0].open_params=/.../audit.log"`
+   one-shot a declanșat `Create Privileged Pod` etc. pe conținutul existent al fișierului.)
+2. **Webhook-ul de audit al kube-apiserver** (`--audit-webhook-config-file`): backend-ul
+   webhook **nu** se inițializează pe apiserver-ul embedded în kubelite - flag prezent și
+   config valid, dar zero metrici `apiserver_audit_webhook_*` și zero livrare (un burst de
+   12 evenimente a produs 0 la plugin). Backend-ul de tip fișier (`--audit-log-path`) din
+   același fișier de argumente funcționează, deci kubelite *chiar* citește argumentele.
 
-The forwarder is fully decoupled from apiserver health (apiserver just writes a
-file) and survives Falco/forwarder restarts.
+Forwarder-ul e complet decuplat de sănătatea apiserver-ului (apiserver-ul doar scrie un
+fișier) și supraviețuiește restart-urilor Falco/forwarder.
 
-## Files
+## Fișiere
 
-- `audit-policy.yaml` - minimal audit policy (RequestResponse on workload/RBAC
-  writes so pod specs are captured; Metadata on secrets/configmaps; **None** on
-  get/list/watch + leases + events -> >90% volume dropped, tiny disk impact on the
-  bottlenecked node-1). Deployed to `/var/snap/microk8s/current/args/audit-policy.yaml`.
-- `values/k8saudit-values.yaml` - Helm values for the plugin-only Falco release
-  (driver off, `controller: deployment`, k8saudit+json plugins, webhook open_params,
-  NodePort service). Use **with** the shared `../falco/config/local-values.yaml`
-  (Logstash endpoint).
-- `audit-forwarder.yaml` - the `tail -f audit.log | POST` bridge Deployment (node-1).
+- `audit-policy.yaml` - audit policy minimal (RequestResponse pe write-urile de
+  workload/RBAC ca să se captureze spec-ul pod-ului; Metadata pe secrets/configmaps;
+  **None** pe get/list/watch + leases + events -> peste 90% din volum aruncat, impact
+  neglijabil pe disk-ul bottleneck-uit al node-1). Deployat la
+  `/var/snap/microk8s/current/args/audit-policy.yaml`.
+- `values/k8saudit-values.yaml` - values Helm pentru release-ul Falco doar-plugin
+  (driver off, `controller: deployment`, plugin-uri k8saudit+json, open_params webhook,
+  service NodePort). Se folosește **împreună cu** `../falco/config/local-values.yaml`
+  partajat (endpoint-ul Logstash).
+- `audit-forwarder.yaml` - Deployment-ul-punte `tail -f audit.log | POST` (node-1).
 
 ## Deploy / re-deploy
 
-### 1. apiserver audit (node-1, one-time)
+### 1. audit-ul apiserver (node-1, o singură dată)
 
 ```bash
-# copy audit-policy.yaml to /var/snap/microk8s/current/args/audit-policy.yaml
-# then add to /var/snap/microk8s/current/args/kube-apiserver:
+# copiaza audit-policy.yaml in /var/snap/microk8s/current/args/audit-policy.yaml
+# apoi adauga in /var/snap/microk8s/current/args/kube-apiserver:
 #   --audit-policy-file=/var/snap/microk8s/current/args/audit-policy.yaml
 #   --audit-log-path=/var/log/kubernetes/audit/audit.log
 #   --audit-log-maxsize=50  --audit-log-maxbackup=3  --audit-log-maxage=7
@@ -84,11 +86,11 @@ sudo snap restart microk8s.daemon-kubelite
 sudo microk8s status --wait-ready --timeout 120
 ```
 
-> The leftover `--audit-webhook-config-file` flag (+ `audit-webhook.yaml`) from the
-> abandoned native-webhook attempt is **non-functional** and can be removed for
-> cleanliness (requires another kubelite restart). It does no harm if left.
+> Flag-ul rămas `--audit-webhook-config-file` (+ `audit-webhook.yaml`) din încercarea
+> abandonată de webhook nativ e **nefuncțional** și poate fi scos pentru curățenie
+> (necesită încă un restart kubelite). Nu face rău dacă e lăsat.
 
-### 2. Falco k8saudit instance + forwarder (laptop)
+### 2. instanța Falco k8saudit + forwarder (de pe laptop)
 
 ```bash
 cd falco-k8saudit
@@ -98,32 +100,32 @@ kubectl apply -f audit-forwarder.yaml
 kubectl rollout status deploy/audit-forwarder -n falco
 ```
 
-## Verify
+## Verificare
 
 ```bash
-# loaded rules
+# reguli incarcate
 POD=$(kubectl get pods -n falco -l app.kubernetes.io/instance=falco-k8saudit,app.kubernetes.io/name=falco -o jsonpath='{.items[0].metadata.name}')
 kubectl exec -n falco $POD -c falco -- falco -L | grep -i privileged
 
-# live test: create a privileged pod, expect a "Create Privileged Pod" alert
+# test live: creeaza un pod privileged, asteapta o alerta "Create Privileged Pod"
 kubectl run k8saudit-test --image=busybox --restart=Never \
   --overrides='{"spec":{"containers":[{"name":"c","image":"busybox","command":["sleep","1"],"securityContext":{"privileged":true}}]}}'
 kubectl logs -n falco $POD -c falco --since=1m | grep -i privileged
 kubectl delete pod k8saudit-test --force --grace-period=0
 
-# in Elasticsearch (only k8saudit events): event.provider = k8s_audit
+# in Elasticsearch (doar evenimentele k8saudit): event.provider = k8s_audit
 curl -s "http://10.102.14.31:9200/security-*/_search?size=0" -H 'Content-Type: application/json' -d \
   '{"query":{"bool":{"must":[{"term":{"event.provider":"k8s_audit"}},{"range":{"@timestamp":{"gte":"now-15m"}}}]}}}'
 ```
 
 ## Troubleshooting
 
-- **No alerts but pod runs:** check the chain in order - (a) is the event in the
-  file? `sudo grep '"privileged":true' /var/log/kubernetes/audit/audit.log` on node-1;
-  (b) is the forwarder up and POSTing? `kubectl logs -n falco deploy/audit-forwarder`;
-  (c) does the plugin webserver answer? `kubectl exec -n attack-target attack-pod --
+- **Nicio alertă dar pod-ul rulează:** verifică lanțul în ordine - (a) e evenimentul în
+  fișier? `sudo grep '"privileged":true' /var/log/kubernetes/audit/audit.log` pe node-1;
+  (b) e forwarder-ul sus și face POST? `kubectl logs -n falco deploy/audit-forwarder`;
+  (c) răspunde webserver-ul plugin-ului? `kubectl exec -n attack-target attack-pod --
   curl -s -o /dev/null -w '%{http_code}' -XPOST http://falco-k8saudit-webhook.falco.svc:9765/k8s-audit -d '{}'`
-  (400 = healthy).
-- **`database is locked` during deploy:** node-1 dqlite bottleneck - retry.
-- **Audit log rotated** (50MB): the forwarder uses `tail -f` (no `-F`); restart it:
+  (400 = sănătos).
+- **`database is locked` la deploy:** bottleneck-ul dqlite de pe node-1 - reîncearcă.
+- **Audit log rotat** (50MB): forwarder-ul folosește `tail -f` (fără `-F`); restartează-l:
   `kubectl rollout restart deploy/audit-forwarder -n falco`.

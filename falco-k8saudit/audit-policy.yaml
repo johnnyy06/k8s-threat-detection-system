@@ -1,40 +1,40 @@
 # =============================================================================
-# audit-policy.yaml - Kubernetes API server audit policy for the Falco
-# k8saudit plugin (thesis: API/admission detection layer).
+# audit-policy.yaml - audit policy pentru API server-ul Kubernetes, pentru
+# plugin-ul Falco k8saudit (teza: stratul de detectie API/admission).
 #
-# Design goal: MINIMAL disk write volume on node-1 (known dqlite/disk I/O
-# bottleneck) while still capturing the signal needed by the k8saudit threat
-# rules - most importantly the workload SPEC (RequestResponse) so that
-# privileged / hostPath / hostPID pods are detectable at admission time
-# (closes the s01 container-escape + s08 malicious-deployment gap where the
-# "deploy privileged pod" step was previously NOT detected: syscall-layer
-# Falco never sees a kubectl apply, only the API server does).
+# Obiectiv de design: volum MINIM de scriere pe disk pe node-1 (bottleneck
+# dqlite/disk I/O cunoscut), capturand totusi semnalul de care au nevoie regulile
+# de amenintare k8saudit - cel mai important SPEC-ul workload-ului (RequestResponse)
+# ca pod-urile privileged / hostPath / hostPID sa fie detectabile la admission
+# (inchide gap-ul s01 container-escape + s08 malicious-deployment, unde pasul
+# "deploy pod privileged" NU era detectat: Falco la nivel syscall nu vede niciodata
+# un kubectl apply, doar API server-ul il vede).
 #
-# Volume control: get/list/watch + leases + events + endpoints -> None
-# (these are >90% of audit volume and carry no detection value here).
+# Control de volum: get/list/watch + leases + events + endpoints -> None
+# (acestea sunt peste 90% din volumul de audit si nu au valoare de detectie aici).
 #
-# Deploy: copy to /var/snap/microk8s/current/args/audit-policy.yaml on node-1
-# and reference it from kube-apiserver via --audit-policy-file. See README.md.
+# Deploy: copiaza la /var/snap/microk8s/current/args/audit-policy.yaml pe node-1
+# si referentiaz-o din kube-apiserver prin --audit-policy-file. Vezi README.md.
 # =============================================================================
 apiVersion: audit.k8s.io/v1
 kind: Policy
-# Don't emit an event at request-receipt; one event per completed request is enough.
+# Nu emite un eveniment la primirea cererii; un eveniment per cerere finalizata e suficient.
 omitStages:
   - "RequestReceived"
 rules:
-  # --- Drop the high-frequency noise first (order matters: first match wins) ---
+  # --- Arunca intai zgomotul de frecventa mare (ordinea conteaza: primul match castiga) ---
 
-  # Reads/watches are the bulk of audit volume and irrelevant for threat detection.
+  # Citirile/watch-urile sunt grosul volumului de audit si irelevante pentru detectie.
   - level: None
     verbs: ["get", "list", "watch"]
 
-  # Lease renewals (node heartbeats, leader election) - extremely chatty.
+  # Reinnoiri de lease (heartbeat-uri de nod, leader election) - extrem de zgomotoase.
   - level: None
     resources:
       - group: "coordination.k8s.io"
         resources: ["leases"]
 
-  # Events / endpoints / endpointslices - high churn, low value.
+  # Events / endpoints / endpointslices - churn mare, valoare mica.
   - level: None
     resources:
       - group: ""
@@ -42,9 +42,9 @@ rules:
       - group: "discovery.k8s.io"
         resources: ["endpointslices"]
 
-  # --- The signal: workload + RBAC writes WITH request body ---
-  # RequestResponse is required so the pod/workload SPEC is captured and the
-  # k8saudit rules can see privileged=true, hostPath, hostPID, hostNetwork, etc.
+  # --- Semnalul: write-uri de workload + RBAC CU request body ---
+  # RequestResponse e necesar ca SPEC-ul pod-ului/workload-ului sa fie capturat si
+  # regulile k8saudit sa poata vedea privileged=true, hostPath, hostPID, hostNetwork etc.
   - level: RequestResponse
     verbs: ["create", "update", "patch", "delete"]
     resources:
@@ -57,11 +57,11 @@ rules:
       - group: "rbac.authorization.k8s.io"
         resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
 
-  # --- Secrets / configmaps / serviceaccounts: metadata only (who/what, no payload) ---
+  # --- Secrets / configmaps / serviceaccounts: doar metadata (cine/ce, fara payload) ---
   - level: Metadata
     resources:
       - group: ""
         resources: ["secrets", "configmaps", "serviceaccounts"]
 
-  # --- Everything else: drop (minimal-disk default) ---
+  # --- Tot restul: arunca (default minimal-disk) ---
   - level: None

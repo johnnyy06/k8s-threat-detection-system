@@ -1,26 +1,47 @@
 # =============================================================================
-# VARIABILE GLOBALE
+# VARIABILE GLOBALE — starea ACTUALĂ a clusterului
 # =============================================================================
 # Copiaza acest fisier ca all.yml si completeaza cu valorile reale:
 #   cp all.yml.example all.yml
+#
+# Suricata pe node-2 SI node-3, Falco cu custom-values, Talon prin Helm 0.4.0.
+# =============================================================================
 
-# Retea
+# --- Retea / topologie -------------------------------------------------------
+# IP-urile INTERNE ale nodurilor (reteaua pe care se vorbesc intre ele + pe care
+# se face join-ul MicroK8s si spre care pointeaza endpoint-urile ELK).
+node1_ip: "10.x.x.x"          # control-plane
+node2_ip: "10.x.x.x"          # security  (senzor Suricata)
+node3_ip: "10.x.x.x"          # aplicatii (senzor Suricata + workloads)
+node4_ip: "10.x.x.x"          # monitoring (ELK systemd)
+
 metallb_range: "10.x.x.200-10.x.x.210"
 
-# IP-uri noduri (retea interna)
-node1_ip: "10.x.x.x"
-node2_ip: "10.x.x.x"
-node3_ip: "10.x.x.x"
-node4_ip: "10.x.x.x"  # Monitoring Node (ELK Stack)
+# Interfata de retea sniff-uita de Suricata (identica pe toate nodurile).
+capture_interface: "ens3"
 
-# Porturi
-elasticsearch_host: "10.x.x.x"  # Acelasi cu node4_ip
+# CIDR-uri interne K8s (Calico pod-uri / servicii) — necesare pentru HOME_NET Suricata.
+pod_cidr: "10.1.0.0/16"
+service_cidr: "10.152.183.0/24"
+
+# HOME_NET Suricata = retele noduri + retea flotanta + pod CIDR + svc CIDR.
+# (Fix critic: fara pod/svc CIDR, regulile web ET nu evalueaza traficul intra-cluster.)
+suricata_home_net: "[10.11.0.0/16,10.102.0.0/16,10.1.0.0/16,10.152.183.0/24]"
+
+# --- ELK (node-4) ------------------------------------------------------------
+elasticsearch_host: "10.x.x.x"   # = node4_ip (IP intern node-4)
 elasticsearch_port: 9200
-logstash_beats_port: 5044
-logstash_http_port: 5045
+logstash_beats_port: 5044        # input Beats (Suricata/Filebeat)
+logstash_http_port: 5045         # input HTTP (Falco via falcosidekick)
 kibana_port: 5601
+es_heap: "4g"
 
-# Namespaces Kubernetes
+# --- Versiuni ----------------------------------------------------------------
+microk8s_channel: "1.32/stable"  # MicroK8s v1.32.x
+falco_chart_version: "8.0.2"     # chart falcosecurity/falco (app 0.43.x)
+talon_chart_version: "0.4.0"     # chart falcosecurity/falco-talon
+
+# --- Namespaces Kubernetes ---------------------------------------------------
 falco_namespace: "falco"
 falco_talon_namespace: "falco-system"
 vulnerable_apps_namespace: "vulnerable-apps"

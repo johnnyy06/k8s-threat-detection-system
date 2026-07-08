@@ -1,0 +1,15 @@
+# =============================================================================
+# falco-local-values.yaml — override deployment-specific (generat de ansible)
+# =============================================================================
+# Se aplica IMPREUNA cu falco-custom-values.yaml (care contine regulile K8S_THREAT):
+#   helm upgrade falco falcosecurity/falco -f falco-custom-values.yaml -f local-values.yaml
+# Tine endpoint-urile interne (IP-uri) in afara configului versionat.
+# =============================================================================
+falcosidekick:
+  config:
+    webhook:
+      # Falco -> falcosidekick -> Logstash HTTP input (:5045) pe node-4 (ELK).
+      address: "http://{{ elasticsearch_host }}:{{ logstash_http_port }}"
+    talon:
+      # falcosidekick output `talon` -> Falco Talon (raspuns automat, ns falco-system).
+      address: "http://falco-talon.{{ falco_talon_namespace }}:2803"

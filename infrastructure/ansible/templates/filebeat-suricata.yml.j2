@@ -1,0 +1,22 @@
+# =============================================================================
+# filebeat.yml — shipping Suricata EVE JSON -> Logstash (generat de ansible)
+# =============================================================================
+# Filebeat trimite eve.json spre LOGSTASH (:5044), NU direct spre
+# Elasticsearch (varianta veche cu index suricata-* a fost inlocuita de pipeline-ul
+# unificat Logstash -> security-*). Campul top-level `node` = senzorul care a
+# capturat (patch-uit per host), folosit pentru atribuirea per-sensor in Kibana.
+# =============================================================================
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/suricata/eve.json
+    json.keys_under_root: true
+    json.add_error_key: true
+    fields:
+      log_type: suricata
+      node: "{{ inventory_hostname }}"
+    fields_under_root: true
+
+output.logstash:
+  hosts: ["{{ elasticsearch_host }}:{{ logstash_beats_port }}"]

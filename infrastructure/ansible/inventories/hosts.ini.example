@@ -3,18 +3,31 @@
 # =============================================================================
 # Copiaza acest fisier ca hosts.ini si completeaza cu IP-urile reale:
 #   cp hosts.ini.example hosts.ini
+#
+# Doua concepte de IP per nod:
+#   ansible_host = IP-ul pe care il ATINGE ansible prin SSH. Daca rulezi de pe
+#                  laptop (in afara retelei cluster-ului), pune IP-ul FLOTANT al
+#                  fiecarui nod. Daca rulezi de pe un nod din cluster, IP-ul intern.
+#   internal_ip  = IP-ul INTERN 10.11.0.x (folosit pentru join-ul MicroK8s si
+#                  pentru endpoint-urile ELK). INTOTDEAUNA cel intern.
+# =============================================================================
 
 [control_plane]
-node-1 ansible_host=10.x.x.x ansible_user=ubuntu
+node-1 ansible_host=10.x.x.x internal_ip=10.11.0.x ansible_user=ubuntu
 
 [security_node]
-node-2 ansible_host=10.x.x.x ansible_user=ubuntu
+node-2 ansible_host=10.x.x.x internal_ip=10.11.0.x ansible_user=ubuntu
 
 [application_node]
-node-3 ansible_host=10.x.x.x ansible_user=ubuntu
+node-3 ansible_host=10.x.x.x internal_ip=10.11.0.x ansible_user=ubuntu
 
 [monitoring_node]
-node-4 ansible_host=10.x.x.x ansible_user=ubuntu
+node-4 ansible_host=10.x.x.x internal_ip=10.11.0.x ansible_user=ubuntu
+
+# Grupul nodurilor cu senzor Suricata (node-2 + node-3) — folosit de suricata_sensor.
+[suricata_sensors:children]
+security_node
+application_node
 
 [all_nodes:children]
 control_plane

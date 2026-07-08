@@ -1,23 +1,30 @@
 ---
 # =============================================================================
-# PLAYBOOK MASTER — Recreare completă a infrastructurii
+# PLAYBOOK MASTER — Recreare completa a infrastructurii
 # =============================================================================
-# Ordinea de rulare este importantă:
-#   1. node-4 (ELK Stack) — trebuie să fie UP primul ca să primească date
-#   2. node-2 (Suricata + Filebeat)
-#   3. node-3 (Filebeat)
-#   4. node-1 (Control Plane, Falco, Falco Talon, aplicații)
+# Ordinea de rulare a playbookurilor:
+#   0. bootstrap_cluster — instaleaza MicroK8s pe toate + formeaza cluster-ul
+#      (node-1 control-plane, node-2/3/4 workers). OBLIGATORIU pe VM-uri goale.
+#   1. node-4 (ELK) — UP primul, ca sa primeasca date
+#   2. node-2 (senzor Suricata + Filebeat)
+#   3. node-3 (senzor Suricata + Filebeat)   <-- ACUM are si senzor Suricata
+#   4. node-1 (Control Plane: Falco custom, Talon via Helm, aplicatii)
 #
-# Rulare completă:
+# Rulare completa:
 #   ansible-playbook -i inventories/hosts.ini playbooks/site.yml
 #
-# Dry-run (fără modificări):
+# Dry-run (fara modificari):
 #   ansible-playbook -i inventories/hosts.ini playbooks/site.yml --check
 #
 # Doar un nod specific:
 #   ansible-playbook -i inventories/hosts.ini playbooks/node4_monitoring.yml
+#
+# NOTA (out of scope Tier 2): acest set aduce NUCLEUL de detectie actual. NU
+# include k8saudit, pipeline-ul ML, Prometheus+Grafana, importul de dashboards
+# Kibana — vezi README.md pentru pasii manuali ramasi.
 # =============================================================================
 
+- import_playbook: bootstrap_cluster.yml
 - import_playbook: node4_monitoring.yml
 - import_playbook: node2_security.yml
 - import_playbook: node3_application.yml

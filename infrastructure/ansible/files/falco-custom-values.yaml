@@ -1,0 +1,658 @@
+driver:
+  kind: modern_ebpf
+
+# Migrat 2026-05-11 de la collectors.containerd/docker (deprecate in chart 8.0.x)
+# la collectors.containerEngine (plugin container@0.6.3 unificat).
+# Adaugat socket-ul MicroK8s (/var/snap/microk8s/common/run/containerd.sock) la
+# engine-urile containerd + cri — chart-ul nu il monteaza implicit (default-urile
+# acopera doar /run/containerd, /run/k3s/... etc.), de aceea metadata k8s (pod/ns/
+# image) era null pe acest cluster. Vezi attack-scenarios/04-sensitive-file.
+collectors:
+  containerEngine:
+    enabled: true
+    engines:
+      docker:
+        enabled: false
+      podman:
+        enabled: false
+      containerd:
+        enabled: true
+        sockets:
+          - /run/host-containerd/containerd.sock
+          - /run/containerd/containerd.sock
+          - /var/snap/microk8s/common/run/containerd.sock
+      cri:
+        enabled: true
+        sockets:
+          - /run/containerd/containerd.sock
+          - /run/crio/crio.sock
+          - /run/k3s/containerd/containerd.sock
+          - /run/host-containerd/containerd.sock
+          - /var/snap/microk8s/common/run/containerd.sock
+      lxc:
+        enabled: false
+      libvirt_lxc:
+        enabled: false
+      bpm:
+        enabled: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+tolerations:
+  - effect: NoSchedule
+    operator: Exists
+  - effect: NoExecute
+    operator: Exists
+
+extraArgs:
+  - -A
+
+falco:
+  base_syscalls:
+    all: true
+  json_output: true
+  json_include_output_property: true
+  log_stderr: true
+  log_syslog: false
+  # Fix descoperit la investigatie scenariu 5: cu "first" (default), Falco oprea
+  # evaluarea la prima regula match pe un eveniment. Default rules (Drop and execute,
+  # Packet socket created etc.) tageau primele si blocau regulile custom K8S_THREAT
+  # care suprapuneau pe execve. Cu "all", toate regulile match firesc - defense in depth.
+  rule_matching: all
+
+falcosidekick:
+  enabled: true
+  # NOTE: webhook.address (Logstash endpoint URL) NU e setat aici intentionat —
+  # e definit în falco/config/local-values.yaml (gitignored) ca să nu commit-uim
+  # IP-ul intern al cluster-ului. La helm upgrade folosește AMBELE values files:
+  #   helm upgrade falco falcosecurity/falco -n falco --version 8.0.2 \
+  #     -f custom-values.yaml -f local-values.yaml
+  # Vezi local-values.yaml.example pentru template.
+  webui:
+    enabled: false
+
+customRules:
+  custom-rules.yaml: |-
+    # =============================================================================
+    # Custom Falco Rules - K8s Threat Detection System
+    # =============================================================================
+
+    - macro: spawned_process
+      condition: evt.type = execve
+
+    - macro: interactive_shell
+      condition: >
+        proc.name in (bash, sh, zsh, dash, csh, ksh, fish) and
+        proc.tty != 0
+
+    - list: k8s_system_namespaces
+      items:
+        - kube-system
+        - kube-public
+        - kube-node-lease
+        - falco
+        - elk
+        - monitoring
+
+    - list: allowed_shadow_readers
+      items:
+        - su
+        - sudo
+        - sshd
+        - login
+        - passwd
+        - useradd
+        - usermod
+        - chpasswd
+        - groupadd
+        # Package install legitimate readers (descoperit la testarea scenariului 6)
+        - dpkg
+        - dpkg-preconfigu  # truncat la 15 chars de TASK_COMM_LEN
+        - apt
+        - apt-get
+        - frontend          # debconf /usr/share/debconf/frontend - citeste /etc/shadow in postinst (descoperit la scenariul 8)
+
+    # Componente de infrastructura care isi citesc LEGITIM propriul SA token / ca.crt
+    # montat la /var/run/secrets/kubernetes.io/serviceaccount/. Descoperit ca background-noise
+    # la validarea scenariilor 09/10/11: stack-ul de observabilitate din namespace-ul
+    # `observability` (Prometheus, Grafana, kube-state-metrics - instalate de mana ca 2 helm
+    # charts) se autentifica spre K8s API, deci citeste periodic token-ul + ca.crt.
+    # Allowlist pe nume de proces (NU namespace-exclude) ca sa ramana surgical - orice ALT
+    # proces din observability care citeste token-ul tot trage. NU includem nume generice
+    # (python/operator/promtail) ramase de la kube-prom-stack-ul abandonat (microk8s enable
+    # observability - prea greu) - acele pod-uri nu mai exista, doar evenimente istorice.
+    - list: allowed_sa_readers
+      items:
+        - prometheus
+        - kube-state-metr   # kube-state-metrics, truncat la 15 ch (TASK_COMM_LEN)
+        - grafana
+        - hostpath-provis   # provisioner PVC din kube-system (scalat la 0, dar revine la nevoie)
+
+    # Package managers + helper-ele lor — scriu LEGITIM in binary dirs / /etc la instalare.
+    # Allowlist pentru regulile FIM (Write Below Binary Dir / Sensitive Etc) ca sa nu dea FP la
+    # apt/dpkg (scenariile 06/08 fac apt-get install). proc.name truncat la 15 ch (TASK_COMM_LEN).
+    - list: package_mgmt_binaries
+      items:
+        - dpkg
+        - dpkg-preconfigu   # dpkg-preconfigure
+        - dpkg-deb
+        - dpkg-divert
+        - dpkg-split
+        - apt
+        - apt-get
+        - apt-config
+        - aptitude
+        - frontend          # debconf /usr/share/debconf/frontend
+        - update-alternativ # update-alternatives (apt postinst)
+        - ldconfig          # rebuild cache linker (apt postinst)
+        - rpm
+        - yum
+        - dnf
+        - apk
+        - snapd
+        - pip
+        - pip3
+        - npm
+        - gem
+
+    - list: crypto_mining_binaries
+      items:
+        - xmrig
+        - xmr-stak
+        - minerd
+        - minergate
+        - cpuminer
+        - ethminer
+        - cgminer
+        - bfgminer
+        - t-rex
+        - phoenixminer
+        - nbminer
+        - lolminer
+        - gminer
+
+    - list: crypto_mining_ports
+      items:
+        - 3333
+        # 4444 scos 2026-05-11 (rev 23): e port-ul default Metasploit pentru reverse
+        # shell, nu un port tipic de mining pool - cauza unei misatribuiri la testarea
+        # scenariului 03 (reverse shell pe localhost:4444 declansa Crypto Mining Pool).
+        - 5555
+        - 7777
+        - 8888
+        - 9999
+        - 14433
+        - 14444
+        - 45700
+
+    - list: network_scanning_tools
+      items:
+        - nmap
+        - masscan
+        - zmap
+        - naabu
+        - rustscan
+        - netcat
+        - nc
+        - ncat
+
+    - list: data_exfil_tools
+      items:
+        - curl
+        - wget
+        - nc
+        - ncat
+        - netcat
+        - scp
+        - sftp
+        - ftp
+        - rclone
+        - rsync
+
+    # NOTE (tuning 2026-05-11, rev 22): enrichment-ul k8s.ns.name / container.name
+    # functioneaza acum (am adaugat socket-ul containerd MicroK8s la collectors.containerEngine,
+    # vezi blocul de sus). Inainte, plugin-ul container@0.6.3 nu se putea conecta la runtime
+    # si toata metadata era null - de aceea macro-urile erau doar 'container.id != host'.
+    # 'custom_container' ramane simplu (orice container, indiferent de namespace).
+    # 'not_system_namespace' filtreaza acum pe namespace REAL, dar FAIL-OPEN: daca un
+    # eveniment nu a fost imbogatit cu k8s.ns.name (poate sa se intample pe unele
+    # syscall-uri de retea), regula tot trage - mai bine un fals-pozitiv decat un fals-negativ.
+    - macro: custom_container
+      condition: >
+        container.id != host
+
+    - macro: not_system_namespace
+      condition: >
+        container.id != host and
+        (k8s.ns.name = "" or not k8s.ns.name in (k8s_system_namespaces))
+
+    - macro: spawned_by_shell
+      condition: >
+        proc.pname in (bash, sh, dash, zsh, csh, ksh, fish)
+
+    # =========================================================================
+    # TUNING: Excludere zgomot de la Calico CNI (calico-node sună legitim K8s API)
+    # Documentat ca decizie de tuning în Cap 5 - "Background noise baseline".
+    # =========================================================================
+    - rule: Contact K8S API Server From Container
+      override:
+        exceptions: append
+      exceptions:
+        - name: cni_calico_node
+          fields: [proc.name, proc.exepath]
+          values:
+            - [calico-node, /usr/bin/calico-node]
+        - name: metallb_speaker
+          fields: [proc.name, proc.exepath]
+          values:
+            - [speaker, /speaker]
+        - name: k8s_infra_components
+          fields: [proc.name, proc.exepath]
+          values:
+            - [hostpath-provis, /hostpath-provisioner]
+            - [metrics-sidecar, /metrics-sidecar]
+            - [dashboard, /dashboard]
+            - [coredns, /coredns]
+            - [controller, /controller]
+            - [kube-controller, /usr/bin/kube-controllers]
+            - [metrics-server, /metrics-server]
+        # Stack-ul de observability (helm charts manuale in ns `observability`) contacteaza
+        # legitim K8s API: kube-state-metrics urmareste (watch) obiectele, Prometheus face
+        # service discovery + scrape pe API/kubelet. Acelasi background-noise descoperit la
+        # restart-ul KSM in sesiunea de tuning rev 27 (vezi allowed_sa_readers). proc.name
+        # trunchiat la 15 ch (kube-state-metr). NU includem python/promtail (kube-prom-stack sters).
+        - name: observability_stack
+          fields: [proc.name, proc.exepath]
+          values:
+            - [kube-state-metr, /kube-state-metrics]
+            - [prometheus, /bin/prometheus]
+
+    - rule: "K8S_THREAT: Container Escape - Sensitive Mount Access"
+      desc: Sensitive host path accessed from container.
+      condition: >
+        custom_container and
+        (evt.type in (open, openat, openat2)) and
+        (fd.name startswith /proc/sysrq-trigger or
+         fd.name startswith /proc/acpi or
+         fd.name = /var/run/docker.sock or
+         fd.name = /run/containerd/containerd.sock or
+         (fd.name startswith /var/lib/kubelet/pods and fd.name contains /secrets/) or
+         fd.name startswith /etc/kubernetes)
+      output: >
+        CONTAINER ESCAPE ATTEMPT: Sensitive host path accessed from container
+        (evt_type=%evt.type user=%user.name user_uid=%user.uid
+        process=%proc.name command=%proc.cmdline file=%fd.name
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [container_escape, T1611, mitre_privilege_escalation, custom_rule, scenario_01]
+      source: syscall
+
+    - rule: "K8S_THREAT: Container Escape - Nsenter or Chroot Usage"
+      desc: Namespace breakout tool detected.
+      condition: >
+        custom_container and
+        spawned_process and
+        (proc.name in (nsenter, chroot) or
+         (proc.name = unshare and proc.cmdline contains "--mount"))
+      output: >
+        CONTAINER ESCAPE ATTEMPT: Namespace breakout tool detected
+        (tool=%proc.name command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [container_escape, T1611, mitre_privilege_escalation, custom_rule, scenario_01]
+      source: syscall
+
+    - rule: "K8S_THREAT: Crypto Mining Binary Detected"
+      desc: Known mining binary executed in container.
+      condition: >
+        custom_container and
+        spawned_process and
+        proc.name in (xmrig, xmr-stak, minerd, minergate, cpuminer, ethminer, cgminer, bfgminer, t-rex, phoenixminer, nbminer, lolminer, gminer)
+      output: >
+        CRYPTO MINING DETECTED: Known mining binary executed in container
+        (process=%proc.name command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name parent=%proc.pname)
+      priority: CRITICAL
+      tags: [crypto_mining, T1496, mitre_resource_hijacking, cross_tool_suricata, custom_rule, scenario_02]
+      source: syscall
+
+    - rule: "K8S_THREAT: Crypto Mining Pool Connection"
+      desc: Connection to mining pool port detected.
+      condition: >
+        custom_container and
+        (evt.type in (connect, sendto)) and
+        fd.l4proto = tcp and
+        fd.rport in (crypto_mining_ports)
+      output: >
+        CRYPTO MINING NETWORK: Connection to mining pool port detected
+        (connection=%fd.name port=%fd.rport protocol=%fd.l4proto
+        process=%proc.name command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [crypto_mining, T1496, mitre_resource_hijacking, cross_tool_suricata, custom_rule, scenario_02]
+      source: syscall
+
+    - rule: "K8S_THREAT: Reverse Shell - Command Pattern in Container"
+      desc: Shell with network redirect pattern in container.
+      condition: >
+        custom_container and
+        spawned_process and
+        proc.name in (bash, sh, dash, zsh) and
+        (proc.cmdline contains "/dev/tcp" or
+         proc.cmdline contains "bash -i" or
+         proc.cmdline contains "exec 5<>" or
+         proc.cmdline contains "0<&196" or
+         proc.cmdline contains "mkfifo" or
+         proc.cmdline contains ".decode(" or
+         (proc.cmdline contains "nc " and proc.cmdline contains " -e") or
+         (proc.cmdline contains "ncat " and proc.cmdline contains " -e") or
+         (proc.cmdline contains "python" and proc.cmdline contains "connect"))
+      output: >
+        REVERSE SHELL DETECTED: Shell with network redirect pattern in container
+        (command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name parent=%proc.pname)
+      priority: CRITICAL
+      tags: [reverse_shell, T1059, mitre_execution, cross_tool_suricata, custom_rule, scenario_03]
+      source: syscall
+
+    - rule: "K8S_THREAT: Reverse Shell - Shell with Network FD"
+      desc: Shell without TTY connected to network socket.
+      condition: >
+        custom_container and
+        spawned_process and
+        proc.name in (bash, sh, dash, zsh) and
+        fd.type in (ipv4, ipv6) and
+        proc.tty = 0
+      output: >
+        REVERSE SHELL DETECTED: Shell connected to network socket (no TTY)
+        (command=%proc.cmdline fd=%fd.name fd_type=%fd.type
+        user=%user.name container_id=%container.id
+        container_name=%container.name k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [reverse_shell, T1059, mitre_execution, cross_tool_suricata, custom_rule, scenario_03]
+      source: syscall
+
+    - rule: "K8S_THREAT: Netcat Listener in Container"
+      desc: Netcat listener started in container.
+      condition: >
+        custom_container and
+        spawned_process and
+        proc.name in (nc, ncat, netcat) and
+        (proc.cmdline contains " -l" or proc.cmdline contains " --listen")
+      output: >
+        BIND SHELL / LISTENER: Netcat listener started in container
+        (command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [reverse_shell, T1059, mitre_execution, custom_rule, scenario_03]
+      source: syscall
+
+    - rule: "K8S_THREAT: Sensitive File Read in Container"
+      desc: Credentials or secrets read in container.
+      condition: >
+        custom_container and
+        (evt.type in (open, openat, openat2)) and
+        (evt.is_open_read = true) and
+        (fd.name = /etc/shadow or
+         fd.name = /etc/gshadow or
+         fd.name startswith /etc/ssh/ssh_host_ or
+         fd.name startswith /root/.ssh/ or
+         (fd.name startswith /home and fd.name contains /.ssh/id_) or
+         fd.name startswith /var/run/secrets/kubernetes.io or
+         fd.name startswith /run/secrets/kubernetes.io) and
+        not (fd.name startswith /var/run/secrets/kubernetes.io/serviceaccount/token or
+             fd.name startswith /run/secrets/kubernetes.io/serviceaccount/token) and
+        not proc.name in (allowed_shadow_readers) and
+        not proc.name in (allowed_sa_readers)
+      output: >
+        SENSITIVE FILE ACCESS: Credentials or secrets read in container
+        (file=%fd.name evt_type=%evt.type user=%user.name
+        process=%proc.name command=%proc.cmdline
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [sensitive_file, T1552, mitre_credential_access, custom_rule, scenario_04]
+      source: syscall
+
+    - rule: "K8S_THREAT: Kubernetes Secret Access from Pod"
+      desc: ServiceAccount token read by unexpected process.
+      condition: >
+        custom_container and
+        not_system_namespace and
+        (evt.type in (open, openat, openat2)) and
+        (evt.is_open_read = true) and
+        (fd.name startswith /var/run/secrets/kubernetes.io/serviceaccount/token or
+         fd.name startswith /run/secrets/kubernetes.io/serviceaccount/token) and
+        not proc.name in (apiserver, controller-manager, kube-proxy,
+                          metrics-server, metrics-sidecar, dashboard,
+                          coredns, calico-node, kube-controller, controller,
+                          speaker, hostpath-provis) and
+        not proc.name in (allowed_sa_readers)
+      output: >
+        K8S SECRET ACCESS: ServiceAccount token read by unexpected process
+        (file=%fd.name process=%proc.name command=%proc.cmdline
+        user=%user.name container_id=%container.id
+        container_name=%container.name k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name)
+      priority: NOTICE
+      tags: [k8s_secrets, T1552, mitre_credential_access, custom_rule, scenario_04]
+      source: syscall
+
+    - rule: "K8S_THREAT: Network Scanning Tool in Container"
+      desc: Scanning tool executed in container.
+      condition: >
+        custom_container and
+        spawned_process and
+        not_system_namespace and
+        proc.name in (nmap, masscan, zmap, naabu, rustscan, netcat, nc, ncat)
+      output: >
+        NETWORK SCAN: Scanning tool executed in container
+        (tool=%proc.name command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [network_scan, T1046, mitre_discovery, cross_tool_suricata, custom_rule, scenario_05]
+      source: syscall
+
+    - rule: "K8S_THREAT: Privilege Escalation via Setuid/Setgid"
+      desc: Setuid/setgid bit modified in container.
+      condition: >
+        custom_container and
+        ((evt.type in (chmod, fchmod, fchmodat)) and
+         (evt.arg.mode = 2755 or evt.arg.mode = 4755 or
+          evt.arg.mode = 6755 or evt.arg.mode = 4700 or
+          evt.arg.mode = 4777)) or
+        (spawned_process and
+         proc.name = chmod and
+         custom_container and
+         (proc.cmdline contains "+s" or
+          proc.cmdline contains "u+s" or
+          proc.cmdline contains "4755" or
+          proc.cmdline contains "2755" or
+          proc.cmdline contains "6755"))
+      output: >
+        PRIVILEGE ESCALATION: Setuid/setgid bit modified in container
+        (command=%proc.cmdline user=%user.name file=%fd.name
+        mode=%evt.arg.mode container_id=%container.id
+        container_name=%container.name k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [privilege_escalation, T1548, mitre_privilege_escalation, custom_rule, scenario_06]
+      source: syscall
+
+    - rule: "K8S_THREAT: Sudo or Su Usage in Container"
+      desc: sudo or su used in container.
+      condition: >
+        custom_container and
+        spawned_process and
+        not_system_namespace and
+        proc.name in (sudo, su) and
+        not proc.pname in (cron, crond)
+      output: >
+        PRIVILEGE ESCALATION: sudo/su used in container
+        (command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name
+        parent=%proc.pname)
+      priority: WARNING
+      tags: [privilege_escalation, T1548, mitre_privilege_escalation, custom_rule, scenario_06]
+      source: syscall
+
+    - rule: "K8S_THREAT: Data Exfiltration - Transfer Tool in Container"
+      desc: Transfer tool executed in container.
+      condition: >
+        custom_container and
+        not_system_namespace and
+        spawned_process and
+        proc.name in (curl, wget, nc, ncat, netcat, scp, sftp, ftp, rclone, rsync)
+      output: >
+        DATA EXFILTRATION SUSPECTED: Transfer tool executed in container
+        (tool=%proc.name command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name parent=%proc.pname)
+      priority: WARNING
+      tags: [data_exfiltration, T1048, mitre_exfiltration, cross_tool_suricata, custom_rule, scenario_07]
+      source: syscall
+
+    # TUNING iteratia B (scenariu 07): conditia initiala verifica doar
+    # evt.type in (sendto, sendmsg) - nslookup/resolver-ul glibc face connect()
+    # pe socketul UDP (cand i se da un server explicit) + sendmmsg()/write(),
+    # deci regula nu se declansa niciodata. Extins cu connect si sendmmsg.
+    - rule: "K8S_THREAT: DNS Exfiltration Suspicion"
+      desc: DNS query to external resolver from container.
+      condition: >
+        custom_container and
+        not_system_namespace and
+        (evt.type = connect or evt.type in (sendto, sendmsg, sendmmsg)) and
+        fd.l4proto = udp and
+        fd.rport = 53 and
+        not fd.rnet in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8")
+      output: >
+        DNS EXFILTRATION SUSPECTED: DNS query to external resolver from container
+        (evt_type=%evt.type process=%proc.name command=%proc.cmdline
+        destination=%fd.rip connection=%fd.name
+        container_id=%container.id container_name=%container.name
+        k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)
+      priority: NOTICE
+      tags: [data_exfiltration, T1048, dns_tunneling, custom_rule, scenario_07]
+      source: syscall
+
+    - rule: "K8S_THREAT: Package Manager in Running Container"
+      desc: Package manager run in live container.
+      condition: >
+        custom_container and
+        spawned_process and
+        not_system_namespace and
+        proc.name in (apt, apt-get, yum, dnf, apk, pip, pip3, npm, gem) and
+        not proc.pname in (entrypoint.sh, start.sh, init.sh, docker-entrypoint)
+      output: >
+        SUSPICIOUS DEPLOYMENT: Package manager run in live container
+        (package_manager=%proc.name command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [malicious_image, T1610, mitre_execution, custom_rule, scenario_08]
+      source: syscall
+
+    - rule: "K8S_THREAT: Binary Downloaded and Executed"
+      desc: Executable dropped in writable dir.
+      condition: >
+        custom_container and
+        spawned_process and
+        ((proc.name = chmod and
+          (proc.cmdline contains "+x" or proc.cmdline contains "777") and
+          (proc.cmdline contains "/tmp/" or proc.cmdline contains "/dev/shm/")) or
+         (proc.name in (bash, sh) and
+          (proc.cmdline contains "/tmp/" or proc.cmdline contains "/dev/shm/") and
+          spawned_by_shell))
+      output: >
+        MALWARE DELIVERY SUSPECTED: Executable dropped in writable dir
+        (command=%proc.cmdline user=%user.name
+        container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name parent=%proc.pname)
+      priority: CRITICAL
+      tags: [malicious_image, T1610, mitre_execution, custom_rule, scenario_08]
+      source: syscall
+
+    # =========================================================================
+    # FIM scoped (File Integrity Monitoring) — detecteaza SCRIEREA (drop/tampering),
+    # independent de executie. Acopera gap-ul "fisier dropuit, nerulat" (FN structural
+    # la scenariul 07). Decizie profesionala: NU monitorizam scrieri generice (ex /tmp =
+    # zgomot), DOAR locatii in care un container imutabil nu ar trebui sa scrie niciodata
+    # la runtime (binary dirs + cai /etc relevante pentru persistence). Allowlist pe
+    # package managers (apt/dpkg) ca s06/s08 sa nu dea FP. NB: Falco vede ACTUL de scriere,
+    # NU continutul (nu stie daca e malware — asta e treaba YARA/ClamAV/image-scanning).
+    # =========================================================================
+    - rule: "K8S_THREAT: Write Below Binary Dir in Container"
+      desc: Executable directory modified at runtime - possible binary tampering / persistence.
+      condition: >
+        custom_container and
+        (evt.type in (open, openat, openat2, creat)) and
+        (evt.is_open_write = true) and
+        (fd.name startswith /bin/ or
+         fd.name startswith /sbin/ or
+         fd.name startswith /usr/bin/ or
+         fd.name startswith /usr/sbin/ or
+         fd.name startswith /usr/local/bin/ or
+         fd.name startswith /usr/local/sbin/) and
+        not proc.name in (package_mgmt_binaries)
+      output: >
+        PERSISTENCE / BINARY TAMPERING: File written to a system binary directory
+        (file=%fd.name evt_type=%evt.type user=%user.name process=%proc.name
+        command=%proc.cmdline container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name parent=%proc.pname)
+      priority: ERROR
+      tags: [persistence, T1554, mitre_persistence, custom_rule, fim]
+      source: syscall
+
+    - rule: "K8S_THREAT: Write Below Sensitive Etc Path in Container"
+      desc: Persistence-relevant /etc path modified at runtime (cron, init, ssh, passwd, etc.).
+      condition: >
+        custom_container and
+        (evt.type in (open, openat, openat2, creat)) and
+        (evt.is_open_write = true) and
+        (fd.name startswith /etc/cron or
+         fd.name startswith /etc/init.d/ or
+         fd.name startswith /etc/rc.local or
+         fd.name startswith /etc/systemd/ or
+         fd.name startswith /etc/profile.d/ or
+         fd.name startswith /etc/ld.so or
+         fd.name startswith /etc/ssh/ or
+         fd.name = /etc/passwd or
+         fd.name = /etc/shadow or
+         fd.name = /etc/sudoers or
+         fd.name startswith /etc/sudoers.d/) and
+        not proc.name in (package_mgmt_binaries) and
+        not proc.name in (allowed_shadow_readers)
+      output: >
+        PERSISTENCE / CONFIG TAMPERING: Sensitive /etc path written in container
+        (file=%fd.name evt_type=%evt.type user=%user.name process=%proc.name
+        command=%proc.cmdline container_id=%container.id container_name=%container.name
+        image=%container.image.repository k8s_ns=%k8s.ns.name
+        k8s_pod=%k8s.pod.name parent=%proc.pname)
+      priority: ERROR
+      tags: [persistence, T1543, mitre_persistence, custom_rule, fim]
+      source: syscall

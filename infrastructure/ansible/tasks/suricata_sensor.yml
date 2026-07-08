@@ -1,0 +1,120 @@
+---
+# =============================================================================
+# TASKS PARTAJATE: senzor Suricata (systemd) + Filebeat -> Logstash
+# =============================================================================
+# Importat de node2_security.yml SI node3_application.yml — arhitectura actuala are
+# senzor Suricata pe AMBELE (sensor-near-target). Config identic; difera doar campul
+# `node` din Filebeat (= inventory_hostname), patch-uit prin template.
+#
+# NOTA: editam suricata.yaml-ul STOCK in loc (replace/lineinfile). Daca structura
+# stock difera intre versiuni, regex-urile pot necesita ajustare — sursa de adevar
+# ramane configul de pe node-2. Vezi suricata/README.md + systemd-sensors/README.md.
+# =============================================================================
+
+# --- Suricata: install din PPA OISF (arhiva Ubuntu are doar 6.0.4, prea vechi) ---
+- name: Instalare software-properties-common
+  apt:
+    name: software-properties-common
+    state: present
+    update_cache: yes
+
+- name: Adaugare PPA OISF Suricata stable
+  apt_repository:
+    repo: ppa:oisf/suricata-stable
+    state: present
+
+- name: Instalare Suricata (8.0.x din PPA)
+  apt:
+    name: suricata
+    state: present
+    update_cache: yes
+
+# --- suricata.yaml: HOME_NET + EXTERNAL_NET + interfata af-packet + rule-files ---
+- name: Set HOME_NET (include pod CIDR + svc CIDR — fix critic web ET)
+  replace:
+    path: /etc/suricata/suricata.yaml
+    regexp: '^(\s*)HOME_NET:.*$'
+    replace: '\1HOME_NET: "{{ suricata_home_net }}"'
+
+- name: Set EXTERNAL_NET = any (ca pod-atacatorul intern sa mai fie "extern")
+  replace:
+    path: /etc/suricata/suricata.yaml
+    regexp: '^(\s*)EXTERNAL_NET:.*$'
+    replace: '\1EXTERNAL_NET: "any"'
+
+- name: Set interfata af-packet (ens3)
+  replace:
+    path: /etc/suricata/suricata.yaml
+    regexp: '(af-packet:\s*\n\s*- interface:)\s*\S+'
+    replace: '\1 {{ capture_interface }}'
+
+- name: Adauga suricata-local.rules in rule-files (dupa suricata.rules)
+  lineinfile:
+    path: /etc/suricata/suricata.yaml
+    insertafter: '^\s*-\s*suricata\.rules\s*$'
+    line: '  - suricata-local.rules'
+    firstmatch: yes
+
+# --- Reguli custom locale (sid 1000010-12) + ET Open ---
+- name: Copiere reguli custom locale
+  copy:
+    src: ../files/suricata-local.rules
+    dest: /var/lib/suricata/rules/suricata-local.rules
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Update reguli ET Open (suricata-update)
+  command: suricata-update
+  changed_when: false
+
+- name: Test config Suricata (suricata -T)
+  command: suricata -T -c /etc/suricata/suricata.yaml
+  changed_when: false
+
+# --- Logrotate pentru eve.json (protejeaza discul; su suricata suricata) ---
+- name: Instalare logrotate Suricata
+  copy:
+    src: ../files/logrotate-suricata.conf
+    dest: /etc/logrotate.d/suricata
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable + (re)start Suricata
+  systemd:
+    name: suricata
+    enabled: yes
+    state: restarted
+
+# --- Filebeat: eve.json -> Logstash (per-host `node`) ---
+- name: Adaugare cheie GPG Elastic
+  shell: |
+    wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | \
+    gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
+  args:
+    creates: /usr/share/keyrings/elastic-keyring.gpg
+
+- name: Adaugare repo Elastic
+  copy:
+    dest: /etc/apt/sources.list.d/elastic-8.x.list
+    content: "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main\n"
+
+- name: Instalare Filebeat
+  apt:
+    name: filebeat
+    state: present
+    update_cache: yes
+
+- name: Configurare filebeat.yml (eve.json -> Logstash, node={{ inventory_hostname }})
+  template:
+    src: ../templates/filebeat-suricata.yml.j2
+    dest: /etc/filebeat/filebeat.yml
+    mode: '0600'
+    backup: yes
+
+- name: Enable + (re)start Filebeat
+  systemd:
+    name: filebeat
+    enabled: yes
+    state: restarted

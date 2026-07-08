@@ -1,76 +1,39 @@
 ---
 # =============================================================================
-# PLAYBOOK: node-3 — Application Node
+# PLAYBOOK: node-3 — Application Node (senzor Suricata + workloads)
 # =============================================================================
-# Configurează:
-#   - Filebeat → Logstash:5044 (loguri containere MicroK8s)
+# Starea ACTUALA: node-3 are ACUM un senzor Suricata (adaugat 2026-05-31,
+# sensor-near-target — nodul are aplicatiile-tinta DVWA/Juice Shop, deci prinde
+# atacurile asupra lor indiferent de nodul atacatorului). Config identic cu node-2
+# via tasks/suricata_sensor.yml (Filebeat va avea camp node=node-3).
 #
-# Aplicațiile (DVWA, Juice Shop) sunt deployate din node-1 cu
-# nodeSelector: node-role=application și rulează pe acest nod.
+# Aplicatiile vulnerabile (DVWA, Juice Shop) NU se instaleaza aici — sunt deployate
+# din node-1 (kubectl apply) cu nodeSelector node-role=application si sunt scheduled
+# pe acest nod. Vezi node1_control_plane.yml.
 #
 # Rulare:
 #   ansible-playbook -i inventories/hosts.ini playbooks/node3_application.yml
 # =============================================================================
 
-- name: Configurare Node-3 — Application Node
+- name: Configurare Node-3 — Application Node (Suricata + workloads)
   hosts: application_node
   become: true
   gather_facts: true
 
   tasks:
+    - name: Setup senzor Suricata + Filebeat
+      import_tasks: ../tasks/suricata_sensor.yml
 
-    # -------------------------------------------------------------------------
-    # SECȚIUNEA 1: Filebeat → Logstash
-    # -------------------------------------------------------------------------
-
-    - name: Adăugare cheie GPG Elastic
-      shell: |
-        wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | \
-        gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
-      args:
-        creates: /usr/share/keyrings/elastic-keyring.gpg
-
-    - name: Adăugare repo Elastic
-      copy:
-        dest: /etc/apt/sources.list.d/elastic-8.x.list
-        content: "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main\n"
-
-    - name: Instalare Filebeat
-      apt:
-        name: filebeat
-        state: present
-        update_cache: yes
-
-    - name: Configurare filebeat.yml
-      copy:
-        dest: /etc/filebeat/filebeat.yml
-        content: |
-          filebeat.inputs:
-            - type: container
-              paths:
-                - /var/snap/microk8s/common/var/log/pods/*/*.log
-
-          output.logstash:
-            hosts: ["{{ elasticsearch_host }}:{{ logstash_beats_port }}"]
-        backup: yes
-
-    - name: Activare și pornire Filebeat
-      systemd:
-        name: filebeat
-        enabled: yes
-        state: started
-
-    # -------------------------------------------------------------------------
-    # SECȚIUNEA 2: Health Checks
-    # -------------------------------------------------------------------------
-
-    - name: "[CHECK] Filebeat status"
-      command: systemctl is-active filebeat
-      register: filebeat_status
+    # --- Health checks ---
+    - name: "[CHECK] Suricata / Filebeat status"
+      command: "systemctl is-active {{ item }}"
+      loop: [suricata, filebeat]
+      register: svc_status
       changed_when: false
       failed_when: false
 
     - name: "[CHECK] Raport stare node-3"
       debug:
         msg:
-          - "Filebeat: {{ filebeat_status.stdout | upper }}"
+          - "Suricata: {{ svc_status.results[0].stdout | upper }}"
+          - "Filebeat: {{ svc_status.results[1].stdout | upper }}"

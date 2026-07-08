@@ -1,0 +1,34 @@
+# =============================================================================
+# Reguli locale custom Suricata — Sistem detectie amenintari Kubernetes
+# =============================================================================
+# COMPLEMENTEAZA ET Open (~63.8k reguli, sursa principala) cu detectii K8s-specifice,
+# pe gap-uri REALE care nu sunt acoperite de ruleset-ul comunitar, legate de scenariile
+# de atac din proiect. NU duplicheaza reguli ET (port scan / SSH brute etc. — retrase 2026-06-14,
+# erau redundante cu ET Open). SID-uri in spatiul local rezervat 1000000+.
+#
+# Deploy: copiat in /var/lib/suricata/rules/suricata-local.rules pe node-2 + node-3 si adaugat
+# in `rule-files:` din /etc/suricata/suricata.yaml. suricata-update NU atinge acest fisier
+# (gestioneaza doar suricata.rules). Vezi suricata/README.md.
+#
+# ATENTIE la topologia de captura: regula trage doar daca traficul trece pe ens3-ul unui
+# nod-senzor (node-2/node-3). Pentru validare, sursa traficului trebuie sa fie un pod pe
+# node-3 (sau tinta sa fie un workload de pe node-3 — sensor-near-target).
+# =============================================================================
+
+# [1000010] Acces la cloud metadata service (IMDS 169.254.169.254) — MITRE T1552.005.
+# Gap descoperit la scenariul 10 (kube-hunter, finding KHV053): incercarea de a contacta
+# IMDS nu era acoperita de nicio regula. Cluster on-prem => orice acces la 169.254.169.254
+# e recon/SSRF (nu exista serviciu real de metadata). Pe cloud-managed K8s ar fi un IoC major.
+alert tcp $HOME_NET any -> 169.254.169.254 any (msg:"K8S-LOCAL Cloud Metadata Service Access Attempt (IMDS 169.254.169.254)"; flags:S; threshold:type limit, track by_src, count 1, seconds 60; classtype:attempted-recon; reference:url,attack.mitre.org/techniques/T1552/005/; metadata:mitre_attack T1552.005; sid:1000010; rev:1;)
+
+# [1000011] Token ServiceAccount / Bearer JWT pe HTTP necriptat — MITRE T1552.001.
+# Leaga de scenariul 11 (lateral movement): un token SA furat, trimis pe trafic HTTP in clar,
+# e expunere de credentiale. "eyJ" = inceputul base64url al unui header JWT ({"alg... }),
+# deci "Bearer eyJ" = token JWT transmis necriptat. K8s SA tokens SUNT JWT-uri.
+alert http $HOME_NET any -> any any (msg:"K8S-LOCAL ServiceAccount/JWT Bearer token over cleartext HTTP"; flow:established,to_server; http.header; content:"Authorization|3a 20|Bearer eyJ"; nocase; threshold:type limit, track by_src, count 1, seconds 60; classtype:policy-violation; reference:url,attack.mitre.org/techniques/T1552/001/; metadata:mitre_attack T1552.001; sid:1000011; rev:1;)
+
+# [1000012] Posibila exfiltrare DNS — eticheta de query anormal de lunga — MITRE T1048.003.
+# Complementeaza scenariul 07 (Falco a prins DNS exfil host-side; aici o prindem network-side
+# => cross-tool). Tool-urile de DNS tunneling encodeaza datele intr-o eticheta lunga (base32/64);
+# o eticheta DNS de 50+ caractere (max e 63) e anormala pentru rezolvare legitima.
+alert dns $HOME_NET any -> any any (msg:"K8S-LOCAL Possible DNS Exfiltration - abnormally long query label"; dns.query; pcre:"/^[^.]{50,}\./"; threshold:type limit, track by_src, count 5, seconds 60; classtype:policy-violation; reference:url,attack.mitre.org/techniques/T1048/003/; metadata:mitre_attack T1048.003; sid:1000012; rev:1;)

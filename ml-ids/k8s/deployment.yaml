@@ -4,7 +4,7 @@
 # spre ES intern (10.11.0.3, fara floating IP/NAT), si declarativitate (in repo, ca Falco/Talon).
 #
 # Read-only pe pipeline-ul existent (interogheaza security-*), scrie doar in security-ml-*.
-# Necesita imaginea ml-infer:latest sideload-ata pe nodul tinta (vezi README.md - cluster fara registry).
+# Necesita imaginea ml-infer:latest sideloadata pe nodul tinta (vezi README.md - cluster fara registry).
 ---
 apiVersion: v1
 kind: Namespace

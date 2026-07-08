@@ -2,15 +2,14 @@
 # =============================================================================
 # PLAYBOOK: node-1 — Control Plane + Management
 # =============================================================================
-# Configurează:
+# Presupune cluster deja format (ruleaza bootstrap_cluster.yml INAINTE).
+# Configureaza:
 #   - Add-on-uri MicroK8s (DNS, Helm, Storage, RBAC, MetalLB)
-#   - Label-uri pe noduri pentru node affinity
-#   - Falco ca DaemonSet pe toate nodurile (driver modern_ebpf)
-#     Falco Sidekick trimite alertele prin Webhook → Logstash:5045
-#   - Falco Talon (răspuns automat la incidente)
-#     Fișiere: files/talon-config.yaml, files/talon-deployment.yaml
-#   - Aplicații vulnerabile: DVWA + Juice Shop pe node-3
-#     Fișier: files/vulnerable-apps.yaml
+#   - Label-uri pe noduri (node-role)
+#   - Falco (DaemonSet) cu REGULILE custom K8S_THREAT (falco-custom-values.yaml)
+#     + falcosidekick -> Logstash:5045 si output `talon` (local-values templated)
+#   - Falco Talon prin HELM 0.4.0 (nu manifeste raw) + override secret config
+#   - Aplicatii vulnerabile: DVWA + Juice Shop (nodeSelector node-role=application)
 #
 # Rulare:
 #   ansible-playbook -i inventories/hosts.ini playbooks/node1_control_plane.yml
@@ -24,35 +23,20 @@
   tasks:
 
     # -------------------------------------------------------------------------
-    # SECȚIUNEA 1: Add-on-uri MicroK8s
+    # SECTIUNEA 1: Add-on-uri MicroK8s
     # -------------------------------------------------------------------------
-
-    - name: Activare addon DNS
-      command: microk8s enable dns
-      register: dns_result
-      changed_when: "'already enabled' not in dns_result.stdout"
-
-    - name: Activare addon Helm3
-      command: microk8s enable helm3
-      register: helm_result
-      changed_when: "'already enabled' not in helm_result.stdout"
-
-    - name: Activare addon hostpath-storage
-      command: microk8s enable hostpath-storage
-      register: storage_result
-      changed_when: "'already enabled' not in storage_result.stdout"
-
-    - name: Activare addon RBAC
-      command: microk8s enable rbac
-      register: rbac_result
-      changed_when: "'already enabled' not in rbac_result.stdout"
+    - name: Activare addon-uri MicroK8s (dns, helm3, hostpath-storage, rbac)
+      command: "microk8s enable {{ item }}"
+      loop: [dns, helm3, hostpath-storage, rbac]
+      register: addon_result
+      changed_when: "'already enabled' not in addon_result.stdout"
 
     - name: Activare addon MetalLB
       command: "microk8s enable metallb:{{ metallb_range }}"
       register: metallb_result
       changed_when: "'already enabled' not in metallb_result.stdout"
 
-    - name: Configurare alias kubectl și helm în bashrc
+    - name: Configurare alias kubectl si helm in bashrc
       blockinfile:
         path: ~/.bashrc
         block: |
@@ -61,81 +45,90 @@
         marker: "# {mark} ANSIBLE MANAGED - kubectl aliases"
 
     # -------------------------------------------------------------------------
-    # SECȚIUNEA 2: Label-uri noduri
+    # SECTIUNEA 2: Label-uri noduri
     # -------------------------------------------------------------------------
-
-    - name: Label node-2 ca Security Node
-      command: microk8s kubectl label nodes node-2 node-role=security --overwrite
-
-    - name: Label node-3 ca Application Node
-      command: microk8s kubectl label nodes node-3 node-role=application --overwrite
-
-    - name: Label node-4 ca Monitoring Node
-      command: microk8s kubectl label nodes node-4 node-role=monitoring --overwrite
+    - name: Label-uri noduri (node-role)
+      command: "microk8s kubectl label nodes {{ item.node }} node-role={{ item.role }} --overwrite"
+      loop:
+        - { node: node-2, role: security }
+        - { node: node-3, role: application }
+        - { node: node-4, role: monitoring }
 
     # -------------------------------------------------------------------------
-    # SECȚIUNEA 3: Instalare Falco cu Helm
-    # DaemonSet pe toate nodurile — monitorizare syscalls
-    # Falco Sidekick → Webhook → Logstash:5045
+    # SECTIUNEA 3: Falco (DaemonSet) cu regulile custom K8S_THREAT
     # -------------------------------------------------------------------------
-
-    - name: Adăugare repo Falco în Helm
+    - name: Adaugare repo Helm falcosecurity
       command: microk8s helm3 repo add falcosecurity https://falcosecurity.github.io/charts
       register: repo_add
       changed_when: "'already exists' not in repo_add.stderr"
 
     - name: Update repo-uri Helm
       command: microk8s helm3 repo update
+      changed_when: false
 
-    - name: Creare namespace falco
-      command: microk8s kubectl create namespace {{ falco_namespace }}
-      register: ns_falco
-      failed_when: ns_falco.rc != 0 and 'already exists' not in ns_falco.stderr
-      changed_when: ns_falco.rc == 0
+    - name: Copiere falco-custom-values.yaml (reguli K8S_THREAT) pe node-1
+      copy:
+        src: ../files/falco-custom-values.yaml
+        dest: /tmp/falco-custom-values.yaml
 
-    - name: Instalare/Upgrade Falco cu Helm
+    - name: Generare falco-local-values.yaml (endpoint Logstash + Talon)
+      template:
+        src: ../templates/falco-local-values.yaml.j2
+        dest: /tmp/falco-local-values.yaml
+
+    - name: Instalare/Upgrade Falco cu Helm (custom-values + local-values)
       command: >
         microk8s helm3 upgrade --install falco falcosecurity/falco
-        --namespace {{ falco_namespace }}
-        --set driver.kind=modern_ebpf
-        --set falcosidekick.enabled=true
-        --set falcosidekick.webui.enabled=true
-        --set falcosidekick.config.webhook.address="http://{{ elasticsearch_host }}:{{ logstash_http_port }}"
+        --namespace {{ falco_namespace }} --create-namespace
+        --version {{ falco_chart_version }}
+        -f /tmp/falco-custom-values.yaml
+        -f /tmp/falco-local-values.yaml
       changed_when: true
 
     # -------------------------------------------------------------------------
-    # SECȚIUNEA 4: Deploy Falco Talon
-    # Folosește fișierele exacte din cluster (files/)
+    # SECTIUNEA 4: Falco Talon prin HELM 0.4.0 + override secret config
+    # (chart-ul 0.4.0 are 2 bug-uri in secrets.yaml -> config.yaml se aplica ca
+    #  override peste secret-ul falco-talon-config. Vezi falco-talon/README.md.)
     # -------------------------------------------------------------------------
-
     - name: Creare namespace falco-system
-      command: microk8s kubectl create namespace {{ falco_talon_namespace }}
+      command: "microk8s kubectl create namespace {{ falco_talon_namespace }}"
       register: ns_talon
       failed_when: ns_talon.rc != 0 and 'already exists' not in ns_talon.stderr
       changed_when: ns_talon.rc == 0
 
-    - name: Copiere talon-config.yaml pe node-1
+    - name: Copiere talon-values.yaml pe node-1
+      copy:
+        src: ../files/talon-values.yaml
+        dest: /tmp/talon-values.yaml
+
+    - name: Copiere talon-config.yaml (config nativ Talon) pe node-1
       copy:
         src: ../files/talon-config.yaml
         dest: /tmp/talon-config.yaml
 
-    - name: Apply talon-config.yaml (ConfigMap)
-      command: microk8s kubectl apply -f /tmp/talon-config.yaml
+    - name: Instalare/Upgrade Falco Talon cu Helm
+      command: >
+        microk8s helm3 upgrade --install falco-talon falcosecurity/falco-talon
+        --namespace {{ falco_talon_namespace }}
+        --version {{ talon_chart_version }}
+        -f /tmp/talon-values.yaml
+      changed_when: true
 
-    - name: Copiere talon-deployment.yaml pe node-1
-      copy:
-        src: ../files/talon-deployment.yaml
-        dest: /tmp/talon-deployment.yaml
+    - name: Override secret falco-talon-config (workaround bug-uri chart)
+      shell: >
+        microk8s kubectl create secret generic falco-talon-config
+        -n {{ falco_talon_namespace }}
+        --from-file=config.yaml=/tmp/talon-config.yaml
+        --dry-run=client -o yaml | microk8s kubectl apply -f -
+      changed_when: true
 
-    - name: Apply talon-deployment.yaml (Deployment + Service + RBAC)
-      command: microk8s kubectl apply -f /tmp/talon-deployment.yaml
+    - name: Rollout restart Falco Talon (aplica secret-ul override)
+      command: "microk8s kubectl rollout restart deploy/falco-talon -n {{ falco_talon_namespace }}"
+      changed_when: true
 
     # -------------------------------------------------------------------------
-    # SECȚIUNEA 5: Deploy aplicații vulnerabile
-    # DVWA + Juice Shop expuse prin MetalLB (LoadBalancer IPs alocate din pool;
-    # IP-urile reale sunt vizibile cu: kubectl get svc -n vulnerable-apps)
+    # SECTIUNEA 5: Aplicatii vulnerabile (DVWA + Juice Shop)
     # -------------------------------------------------------------------------
-
     - name: Copiere vulnerable-apps.yaml pe node-1
       copy:
         src: ../files/vulnerable-apps.yaml
@@ -143,43 +136,24 @@
 
     - name: Apply vulnerable-apps.yaml
       command: microk8s kubectl apply -f /tmp/vulnerable-apps.yaml
+      changed_when: true
 
     # -------------------------------------------------------------------------
-    # SECȚIUNEA 6: Health Checks
+    # SECTIUNEA 6: Health Checks
     # -------------------------------------------------------------------------
-
-    - name: "[CHECK] Stare noduri Kubernetes"
-      command: microk8s kubectl get nodes -o wide
-      register: nodes_status
+    - name: "[CHECK] Noduri / pod-uri Falco / pod-uri Talon / servicii app"
+      command: "{{ item }}"
+      loop:
+        - "microk8s kubectl get nodes -o wide"
+        - "microk8s kubectl get pods -n {{ falco_namespace }}"
+        - "microk8s kubectl get pods -n {{ falco_talon_namespace }}"
+        - "microk8s kubectl get svc -n {{ vulnerable_apps_namespace }}"
+      register: checks
       changed_when: false
 
-    - name: "[CHECK] Afișare noduri"
+    - name: "[CHECK] Raport"
       debug:
-        msg: "{{ nodes_status.stdout_lines }}"
-
-    - name: "[CHECK] Pod-uri Falco"
-      command: microk8s kubectl get pods -n {{ falco_namespace }}
-      register: falco_pods
-      changed_when: false
-
-    - name: "[CHECK] Afișare pod-uri Falco"
-      debug:
-        msg: "{{ falco_pods.stdout_lines }}"
-
-    - name: "[CHECK] Pod-uri Falco Talon"
-      command: microk8s kubectl get pods -n {{ falco_talon_namespace }}
-      register: talon_pods
-      changed_when: false
-
-    - name: "[CHECK] Afișare pod-uri Falco Talon"
-      debug:
-        msg: "{{ talon_pods.stdout_lines }}"
-
-    - name: "[CHECK] Servicii aplicații vulnerabile (IP-uri externe)"
-      command: microk8s kubectl get svc -n {{ vulnerable_apps_namespace }}
-      register: vuln_svc
-      changed_when: false
-
-    - name: "[CHECK] Afișare servicii"
-      debug:
-        msg: "{{ vuln_svc.stdout_lines }}"
+        msg: "{{ item.stdout_lines }}"
+      loop: "{{ checks.results }}"
+      loop_control:
+        label: "{{ item.cmd }}"

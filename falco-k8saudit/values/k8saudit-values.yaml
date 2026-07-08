@@ -1,48 +1,49 @@
 # =============================================================================
-# k8saudit-values.yaml - second Falco release = K8s API/audit detection layer.
+# k8saudit-values.yaml - al doilea release Falco = stratul de detectie K8s API/audit.
 #
-# This is a PLUGIN-ONLY Falco instance (no kernel driver, no syscall capture).
-# It receives kube-apiserver audit events over a WEBHOOK (the apiserver POSTs
-# audit batches to the k8saudit plugin's embedded webserver) and feeds the SAME
-# ELK pipeline as the syscall Falco: falcosidekick -> Logstash:5045 -> security-*.
+# Aceasta e o instanta Falco DOAR-PLUGIN (fara kernel driver, fara captura de
+# syscall-uri). Primeste evenimentele de audit ale kube-apiserver printr-un WEBHOOK
+# (apiserver-ul trimite POST batch-uri de audit catre webserver-ul embedded al
+# plugin-ului k8saudit) si alimenteaza ACELASI pipeline ELK ca Falco syscall:
+# falcosidekick -> Logstash:5045 -> security-*.
 #
-# Why webhook and not file:// : the k8saudit 0.18 file:// follow mode does not
-# tail an actively-appended hostPath file in this environment (it reads to EOF
-# at open and misses appends; batch/no-scheme read works but is one-shot).
-# Webhook is the canonical, reliable Falco k8saudit ingestion path. The apiserver
-# audit webhook is asynchronous/batched - a slow or down backend never blocks API
-# requests (events buffer then drop). We ALSO keep --audit-log-path on the
-# apiserver as an independent on-disk debug/backup trail (negligible cost with
-# the minimal audit-policy.yaml).
+# De ce webhook si nu file:// : modul file:// follow al k8saudit 0.18 nu face tail
+# pe un fisier hostPath in care se scrie continuu in acest mediu (citeste pana la
+# EOF la deschidere si rateaza append-urile; citirea batch/no-scheme functioneaza,
+# dar e one-shot). Webhook e calea canonica, fiabila de ingestie Falco k8saudit.
+# Webhook-ul de audit al apiserver-ului e asincron/batched - un backend lent sau
+# picat nu blocheaza niciodata cererile API (evenimentele fac buffer apoi se pierd).
+# Pastram DE ASEMENEA --audit-log-path pe apiserver ca un trail independent pe disk
+# de debug/backup (cost neglijabil cu audit-policy.yaml-ul minimal).
 #
-# Purpose (thesis): adds the API/admission detection layer the syscall Falco
-# structurally cannot see - closes the s01/s08 gap where "deploy a privileged
-# pod" produced NO detection. Defense-in-depth: host/syscall=Falco,
+# Scop (teza): adauga stratul de detectie API/admission pe care Falco syscall nu-l
+# poate vedea structural - inchide gap-ul s01/s08 unde "deploy pod privileged"
+# nu producea NICIO detectie. Defense-in-depth: host/syscall=Falco,
 # network=Suricata, API=k8saudit.
 #
-# Deploy together with the shared local-values.yaml (Logstash endpoint, gitignored):
+# Deploy impreuna cu local-values.yaml partajat (endpoint Logstash, gitignored):
 #   helm upgrade --install falco-k8saudit falcosecurity/falco -n falco \
 #     --version 8.0.2 -f values/k8saudit-values.yaml -f ../falco/config/local-values.yaml
 #
-# apiserver side (node-1): --audit-webhook-config-file -> http://127.0.0.1:30007/k8s-audit
-# (the NodePort below). See falco-k8saudit/README.md for the webhook kubeconfig.
+# Partea de apiserver (node-1): --audit-webhook-config-file -> http://127.0.0.1:30007/k8s-audit
+# (NodePort-ul de mai jos). Vezi falco-k8saudit/README.md pentru kubeconfig-ul webhook.
 # =============================================================================
 
-# No kernel driver / no syscall collectors - this is a plugin-only instance.
+# Fara kernel driver / fara collectors de syscall - instanta doar-plugin.
 driver:
   enabled: false
 collectors:
   enabled: false
 
-# Single Deployment (one consumer of the apiserver audit stream), not a DaemonSet.
+# Un singur Deployment (un consumator al stream-ului de audit apiserver), nu DaemonSet.
 controller:
   kind: deployment
   deployment:
     replicas: 1
 
-# Expose the plugin webserver (container port 9765) as a NodePort so the
-# apiserver on node-1 can POST audit events to http://127.0.0.1:30007/k8s-audit.
-# kube-proxy routes the NodePort to the pod wherever it is scheduled.
+# Expune webserver-ul plugin-ului (portul container 9765) ca NodePort, ca
+# apiserver-ul de pe node-1 sa poata trimite POST evenimente la http://127.0.0.1:30007/k8s-audit.
+# kube-proxy ruteaza NodePort-ul catre pod oriunde ar fi scheduled.
 services:
   - name: webhook
     type: NodePort
@@ -51,7 +52,7 @@ services:
         nodePort: 30007
         protocol: TCP
 
-# Install the k8saudit plugin + its rules via falcoctl (json plugin ships in the image).
+# Instaleaza plugin-ul k8saudit + regulile lui via falcoctl (plugin-ul json vine in imagine).
 falcoctl:
   artifact:
     install:
@@ -66,9 +67,9 @@ falcoctl:
         refs: [k8saudit-rules:0]
 
 falco:
-  # Plugin-only ruleset: stock k8s audit rules + a rules.d dir for our future
-  # custom K8S_THREAT audit rules. NB: this REPLACES the default syscall
-  # rules_files (intentional - no syscall events here).
+  # Ruleset doar-plugin: regulile stock k8s audit + un dir rules.d pentru viitoarele
+  # noastre reguli custom K8S_THREAT de audit. NB: asta INLOCUIESTE rules_files-ul
+  # syscall default (intentionat - nu exista evenimente syscall aici).
   rules_files:
     - /etc/falco/k8s_audit_rules.yaml
     - /etc/falco/rules.d
@@ -76,7 +77,7 @@ falco:
     - name: k8saudit
       library_path: libk8saudit.so
       init_config: ""
-      # WEBHOOK mode: the plugin's embedded HTTP server listens on :9765/k8s-audit.
+      # Mod WEBHOOK: serverul HTTP embedded al plugin-ului asculta pe :9765/k8s-audit.
       open_params: "http://:9765/k8s-audit"
     - name: json
       library_path: libjson.so
@@ -84,13 +85,13 @@ falco:
   load_plugins: [k8saudit, json]
   json_output: true
   json_include_output_property: true
-  # Fire ALL matching rules per audit event (default is 'first', which would let
-  # only "Create Privileged Pod" fire on an escape-pod and suppress the
-  # overlapping "Create Sensitive Mount Pod" / "Create HostNetwork Pod" /
-  # "Create HostPid Pod" - same defense-in-depth reason as the syscall Falco.
+  # Declanseaza TOATE regulile care matcheaza per eveniment de audit (default e 'first',
+  # care ar lasa doar "Create Privileged Pod" sa traga pe un escape-pod si ar suprima
+  # regulile suprapuse "Create Sensitive Mount Pod" / "Create HostNetwork Pod" /
+  # "Create HostPid Pod" - acelasi motiv de defense-in-depth ca la Falco syscall.
   rule_matching: all
 
-# Route events to the SAME Logstash as the syscall Falco.
-# The webhook address itself comes from the shared local-values.yaml overlay.
+# Ruteaza evenimentele catre ACELASI Logstash ca Falco syscall.
+# Adresa webhook propriu-zisa vine din overlay-ul local-values.yaml partajat.
 falcosidekick:
   enabled: true

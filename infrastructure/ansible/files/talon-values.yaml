@@ -1,0 +1,104 @@
+# Falco Talon — values pentru chart-ul oficial falcosecurity/falco-talon (chart 0.4.0, app 0.3.0)
+# Inlocuieste vechile manifeste raw din falco-talon/config/ (nefunctionale: 0 reguli, NATS pica,
+# format vechi). Deploy:
+#   helm install falco-talon falcosecurity/falco-talon -n falco-system --version 0.4.0 \
+#     -f falco-talon/values/talon-values.yaml
+# Pipeline: Falco -> falcosidekick (output `talon`, vezi falco/config/local-values.yaml) -> Talon.
+
+# 1 replica e suficient pentru demo (mai usor pe control-plane-ul lent al cluster-ului).
+# Daca leader-election-ul flapuie din cauza API-ului lent (lease renewal timeout, vezi istoricul
+# pod-ului vechi), pune `config.deduplication.leaderElection: false`.
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 256Mi
+
+extraEnv:
+  - name: LOG_LEVEL
+    value: info
+
+config:
+  listenAddress: 0.0.0.0
+  listenPort: 2803
+  watchRules: true
+
+  # Notifier: scrie evenimentele de raspuns in ES (acelasi host node-4 ca Logstash 10.11.0.3).
+  # Apar in Kibana intr-un index separat `falco-talon-*` (NU `security-*`), distinct de detectii.
+  defaultNotifiers:
+    - elasticsearch
+  notifiers:
+    elasticsearch:
+      url: "http://10.11.0.3:9200"
+      # createIndexTemplate: false — ES 8.19 respinge API-ul de index-template folosit de Talon
+      # (notifier-ul pica la init cu "invalid character 'u'..."). Dezactivat => indexul
+      # `falco-talon-YYYY.MM.DD` se creeaza automat cu mapping dinamic. Suficient pentru demo.
+      createIndexTemplate: false
+      numberOfShards: 1
+      numberOfReplicas: 1
+
+  deduplication:
+    # leaderElection: false — cu 1 replica nu avem ce dedup-a intre replici, iar control-plane-ul
+    # lent al cluster-ului face ca reinnoirea lease-ului sa dea timeout (context deadline exceeded).
+    # Dezactivat => Talon proceseaza direct evenimentele, fara spam de lease.
+    leaderElection: false
+    timeWindowSeconds: 5
+
+  printAllEvents: false
+
+  # Regulile proiectului. Chart-ul concateneaza rules.yaml-ul default (doar 2 actiuni:
+  # `Terminate Pod`, `Label Pod as Suspicious`) cu acest bloc => aici definim ACTIUNILE noastre
+  # (cu parametri exacti) + REGULILE care fac match pe regulile custom `K8S_THREAT:*` ale Falco.
+  rulesOverride: |
+    # ---- Actiuni (definitii reutilizabile) ----
+    - action: Label Compromised
+      description: "Marcheaza pod-ul ca fiind compromis (reversibil)."
+      actionner: kubernetes:label
+      parameters:
+        level: pod
+        labels:
+          compromised: "true"
+
+    - action: Isolate Pod
+      description: "NetworkPolicy nativ (enforce Calico) care izoleaza pod-ul: permite doar
+        CIDR-ul de servicii cluster (DNS), blocheaza extern + east-west. Reversibil: sterge netpol."
+      actionner: kubernetes:networkpolicy
+      parameters:
+        allow_cidr:
+          - "10.152.183.0/24"
+
+    - action: Terminate Demo Pod
+      description: "Omoara pod-ul (doar pentru pod-ul throwaway talon-demo)."
+      actionner: kubernetes:terminate
+      parameters:
+        grace_period_seconds: 5
+        ignore_daemonsets: true
+        ignore_statefulsets: true
+        # NU setam ignore_standalone_pods: talon-demo e standalone si vrem sa fie terminat.
+
+    # ---- Reguli (match Falco -> actiuni) ----
+    # A. Reverse shell -> raspuns ne-distructiv si REVERSIBIL (sigur pe attack-pod).
+    - rule: Reverse shell in container -> izolare + label
+      description: "Raspuns la reverse shell: izoleaza la nivel de retea + eticheteaza."
+      match:
+        rules:
+          - "K8S_THREAT: Reverse Shell - Command Pattern in Container"
+      actions:
+        - action: Label Compromised
+        - action: Isolate Pod
+
+    # B. Crypto mining -> terminate, dar DOAR pe pod-ul demo dedicat (scope pe nume de pod),
+    #    ca scenariul 02 din attack-pod sa NU fie omorat.
+    - rule: Crypto mining pe pod demo -> terminate
+      description: "Demonstreaza kill-ul automat pe un pod throwaway (talon-demo)."
+      match:
+        rules:
+          - "K8S_THREAT: Crypto Mining Binary Detected"
+        output_fields:
+          - k8s.pod.name=talon-demo
+      actions:
+        - action: Terminate Demo Pod

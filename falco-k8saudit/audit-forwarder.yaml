@@ -1,27 +1,28 @@
 # =============================================================================
-# audit-forwarder.yaml - bridges the apiserver audit LOG FILE to the Falco
-# k8saudit plugin's webhook listener.
+# audit-forwarder.yaml - face puntea intre FISIERUL de audit log al apiserver-ului
+# si webhook listener-ul plugin-ului Falco k8saudit.
 #
-# Why this exists: on this MicroK8s/kubelite cluster neither "native" live feed
-# worked - the k8saudit 0.18 file:// driver does not tail an appended hostPath
-# file, and the kube-apiserver audit *webhook* backend does not initialize on
-# the kubelite-embedded apiserver (flag present + config valid, but no webhook
-# metrics and no delivery). Both proven dead-ends (2026-06-27).
+# De ce exista: pe acest cluster MicroK8s/kubelite niciuna dintre caile "native"
+# de live-feed nu a functionat - driver-ul file:// al k8saudit 0.18 nu face tail pe
+# un fisier hostPath in care se scrie continuu, iar backend-ul *webhook* de audit al
+# kube-apiserver nu se initializeaza pe apiserver-ul embedded in kubelite (flag
+# prezent + config valid, dar zero metrici webhook si zero livrare). Ambele sunt
+# dead-end-uri dovedite (2026-06-27).
 #
-# What DOES work (proven): (1) apiserver reliably writes audit events to
-# /var/log/kubernetes/audit/audit.log per audit-policy.yaml; (2) Falco reads
-# that file correctly in batch mode (rules fire: Create Privileged Pod, ...);
-# (3) the k8saudit plugin's embedded webserver accepts POSTed EventLists.
+# Ce FUNCTIONEAZA (dovedit): (1) apiserver-ul scrie fiabil evenimentele de audit in
+# /var/log/kubernetes/audit/audit.log conform audit-policy.yaml; (2) Falco citeste
+# corect fisierul in mod batch (regulile trag: Create Privileged Pod, ...);
+# (3) webserver-ul embedded al plugin-ului k8saudit accepta EventList-uri prin POST.
 #
-# This forwarder stitches (1)+(3): it tails the audit log and POSTs each event
-# (wrapped in an EventList) to the plugin's webhook Service. Result: live
-# API/admission detection, fully decoupled from apiserver health (apiserver just
-# writes a file), surviving Falco/forwarder restarts.
+# Forwarder-ul coase (1)+(3): face tail pe audit log si trimite (POST) fiecare
+# eveniment (impachetat intr-un EventList) catre Service-ul webhook al plugin-ului.
+# Rezultat: detectie live API/admission, complet decuplata de sanatatea apiserver-ului
+# (apiserver-ul doar scrie un fisier), care supravietuieste restart-urilor Falco/forwarder.
 #
-# Runs as root (audit.log is 0600 root) and on node-1 (where the file lives).
-# Rotation note: uses `tail -f` (BusyBox has no -F); with the minimal audit
-# policy the 50MB rotation threshold is never hit during a demo. If the log ever
-# rotates, restart this Deployment.
+# Ruleaza ca root (audit.log e 0600 root) si pe node-1 (unde e fisierul).
+# Nota rotatie: foloseste `tail -f` (BusyBox nu are -F); cu audit policy-ul minimal
+# pragul de rotatie de 50MB nu e atins niciodata intr-un demo. Daca log-ul totusi se
+# roteste, restarteaza acest Deployment.
 # =============================================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -40,14 +41,14 @@ spec:
       labels:
         app: audit-forwarder
     spec:
-      # The audit log is a hostPath file on the control-plane node.
+      # Audit log-ul e un fisier hostPath pe nodul de control-plane.
       nodeSelector:
         kubernetes.io/hostname: node-1
       containers:
         - name: forwarder
           image: curlimages/curl:8.11.1
           securityContext:
-            runAsUser: 0          # read the 0600 root-owned audit.log
+            runAsUser: 0          # citeste audit.log-ul detinut de root (0600)
           command: ["/bin/sh", "-c"]
           args:
             - |

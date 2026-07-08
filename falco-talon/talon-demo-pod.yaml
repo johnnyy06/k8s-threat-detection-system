@@ -1,6 +1,6 @@
-# Pod throwaway pentru a demonstra raspunsul automat LETAL al Falco Talon (kubernetes:terminate).
+# Pod throwaway pentru a demonstra raspunsul automat al Falco Talon (kubernetes:terminate).
 # Numele EXACT `talon-demo` e cerut de regula Talon B (match output_fields k8s.pod.name=talon-demo),
-# ca sa NU omoare attack-pod-ul cand scenariul 02 (crypto mining) ruleaza acolo.
+# ca sa NU faca kill pe attack-pod-ul cand scenariul 02 (crypto mining) ruleaza acolo.
 #
 # Etic, ca scenariul 02: NU rulam un miner real — copiem /bin/sleep ca `xmrig`, ceea ce e suficient
 # ca Falco sa declanseze `K8S_THREAT: Crypto Mining Binary Detected` (match pe proc.name).
