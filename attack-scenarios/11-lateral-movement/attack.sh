@@ -16,7 +16,7 @@ NS=attack-target
 source "$(dirname "$0")/../_env.sh"
 
 # Tinta east-west (DVWA pod, node-3) - verificat 2026-05-30
-DVWA_POD=10.1.139.66
+DVWA_POD=10.1.139.106
 
 echo "=================================================="
 echo "Scenariul 11 - Lateral Movement"

@@ -10,8 +10,8 @@ source "$(dirname "$0")/../_env.sh"
 
 # Targets verificate la 2026-06-18 (pod IPs sunt efemere — re-verifică după recreare)
 K8S_API=10.152.183.1
-DVWA=10.1.139.66
-FALCO=10.1.139.101   # falco pod pe node-3 (inter-node față de attack-pod/node-2 → vizibil Suricata)
+DVWA=10.1.139.106
+FALCO=10.1.139.103   # falco pod pe node-3 (inter-node față de attack-pod/node-2 → vizibil Suricata)
 
 echo "=================================================="
 echo "Scenariul 5 - Network Scanning"
@@ -63,7 +63,7 @@ curl -s "$ES/security-*/_search?size=0" \
   | python3 -m json.tool | sed -n '/aggregations/,$p'
 
 echo ""
-echo "=== Total events (orice tag) cumulate de la atacator (10.1.247.59) ==="
+echo "=== Total events (orice tag) cumulate de la atacator (10.1.247.9) ==="
 echo -n "Falco events: "
 curl -s "$ES/security-*/_count" -H 'Content-Type: application/json' \
   -d "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"tags\":\"falco\"}},{\"range\":{\"@timestamp\":{\"gte\":\"$START_TS\"}}}]}}}" 2>&1

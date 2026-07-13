@@ -16,7 +16,7 @@ JOB=zap-scan
 source "$(dirname "$0")/../_env.sh"
 HERE=$(dirname "$0")
 
-DVWA_POD=10.1.139.66   # tinta (node-3), verificat 2026-05-30
+DVWA_POD=10.1.139.106   # tinta (node-3), verificat 2026-07-13
 
 echo "=================================================="
 echo "Scenariul 9 - OWASP ZAP DAST scan vs DVWA ($DVWA_POD)"

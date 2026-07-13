@@ -31,4 +31,4 @@ spec:
           # reale SQLi/XSS/path-traversal). -I = exit 0 chiar daca gaseste warnings.
           # -m 2 = 2 min spider. Tinta = pod-ul DVWA direct (cross-node).
           command: ["zap-full-scan.py"]
-          args: ["-t", "http://10.1.139.66", "-I", "-m", "2"]
+          args: ["-t", "http://10.1.139.106", "-I", "-m", "2"]
