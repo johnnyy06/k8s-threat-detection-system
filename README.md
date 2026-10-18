@@ -1,163 +1,242 @@
-# k8s-threat-detection-system
+# Kubernetes Threat Detection System
 
-Integrated cyber threat detection, correlation, and automated response system for Kubernetes environments, combining Falco (runtime security), Suricata (network IDS/IPS), and the ELK Stack (centralized logging & analytics).
+**Multi-layer threat detection, correlation and automated response for Kubernetes.** Falco watches container runtime and Kubernetes API activity, Suricata watches network traffic, and the ELK Stack merges both into one correlated view. Falco Talon responds automatically, and an experimental Random Forest model gives a second opinion on network flows.
 
-Built as a bachelor's thesis project.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![MicroK8s 1.32](https://img.shields.io/badge/MicroK8s-1.32-E95420?logo=ubuntu&logoColor=white)
+![Falco 0.43](https://img.shields.io/badge/Falco-0.43-00AEC7)
+![Suricata 8.0](https://img.shields.io/badge/Suricata-8.0-EF6C00)
+![Elastic Stack 8.x](https://img.shields.io/badge/Elastic_Stack-8.x-005571?logo=elasticstack&logoColor=white)
+![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 
-## Overview
+Built as a bachelor's thesis project and validated end-to-end against **11 attack scenarios mapped to MITRE ATT&CK** on a 4-node MicroK8s cluster.
 
-This project implements a **defense-in-depth** security monitoring pipeline for Kubernetes clusters. Instead of relying on a single detection tool, it correlates alerts from multiple layers — container runtime (Falco), network traffic (Suricata), and centralized logs (ELK) — to provide a unified view of security incidents and enable automated response actions.
+> [!NOTE]
+> **Project status: complete.** The lab cluster (four Ubuntu VMs in a university datacenter) has since been decommissioned. The dashboards, screenshots and results in this repository were produced on that cluster. Everything needed to rebuild it is included; see [Reproducing the lab](#reproducing-the-lab).
 
-**Key principle:** Deterministic, rule-based detection — focused on reliability and explainability.
+[Why multiple layers](#why-multiple-layers) · [Architecture](#architecture) · [Detection coverage](#detection-coverage) · [Deterministic vs ML](#deterministic-vs-ml) · [Dashboards](#kibana-dashboards) · [Layout](#repository-layout) · [Reproducing](#reproducing-the-lab) · [Limitations](#known-limitations)
+
+## Why multiple layers
+
+Every detection tool has structural blind spots. This project combines three detection layers so that each one covers what the others cannot see:
+
+| Layer | Tool | Sees | Cannot see |
+|---|---|---|---|
+| Host / runtime | **Falco**: modern eBPF, DaemonSet on every node, 18 custom `K8S_THREAT` rules | Process execution, file access and syscalls inside containers | Requests to the Kubernetes API, such as `kubectl apply` of a privileged pod |
+| Kubernetes API / admission | **Falco k8saudit plugin**, fed from the API server audit log | Creation of privileged or host-mounted pods, access to secrets, RBAC changes | What runs inside a container afterwards |
+| Network | **Suricata**: passive IDS on the node NIC, ET Open plus 3 custom rules | Web attacks, scans, DNS tunneling, east-west traffic between nodes | Loopback traffic, traffic between pods on the same node, encrypted payloads |
+
+On top of the detection layers:
+
+- **Correlation and analysis:** Logstash normalizes alerts from every source into the Elastic Common Schema (ECS) and maps them to MITRE ATT&CK techniques. Everything lands in a single Elasticsearch index that 5 Kibana dashboards read from.
+- **Automated response:** Falco Talon reacts to Falco alerts by labeling the offending pod, isolating it with a NetworkPolicy, or terminating it.
+- **ML second opinion (experimental):** a Random Forest scores every Suricata flow and writes its verdicts to a separate index, so you can compare them with signature-based detection. It adds to the rule-based layers and does not replace them.
+- **Cluster metrics:** Prometheus and Grafana track node and control-plane health. They are kept separate from the security pipeline.
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                       MicroK8s Cluster (4 VMs)                    │
-│                                                                   │
-│   node-1            node-2            node-3            node-4     │
-│  control plane     worker            app/worker        monitoring │
-│  + dqlite          + Suricata        + Suricata        + ELK       │
-│                    sensor (systemd)  sensor (systemd)  (systemd)   │
-│                                      + workloads /                 │
-│                                      vulnerable apps               │
-│                                                                   │
-│   ── Falco runs as a DaemonSet on ALL nodes (modern eBPF) ──       │
-│   ── Suricata = per-node systemd sensors on node-2 + node-3 ──     │
-│                                                                   │
-│   Falco ──falcosidekick webhook──┐                                │
-│                                  ▼                                │
-│   Suricata EVE JSON ──────────► Logstash ──► Elasticsearch        │
-│                                  (normalizes both into one         │
-│                                   daily index: security-YYYY.MM.dd │
-│                                   tagged `falco` | `suricata`)     │
-│                                          │                        │
-│                                       Kibana                       │
-│                              (cross-tool correlation,              │
-│                               dashboards, investigation)           │
-│                                                                   │
-│   Falco alert ──► Falco Talon ──► kill container / isolate pod     │
-│                   (NetworkPolicy)                                  │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph detect["Detection layers"]
+        falco["Falco<br/>syscall · modern eBPF<br/>DaemonSet on all nodes"]
+        k8saudit["Falco k8saudit<br/>API / admission"]
+        suricata["Suricata<br/>network IDS<br/>node-2 + node-3"]
+    end
+
+    apiserver["kube-apiserver<br/>audit.log"] -->|"audit-forwarder"| k8saudit
+    falco --> sidekick["falcosidekick"]
+    k8saudit --> sidekick
+    sidekick -->|"HTTP :5045"| logstash["Logstash<br/>ECS + MITRE enrichment"]
+    suricata -->|"eve.json → Filebeat :5044"| logstash
+    logstash --> es[("Elasticsearch<br/>security-*")]
+    es --> kibana["Kibana<br/>5 dashboards"]
+
+    sidekick -->|"talon output"| talon["Falco Talon"]
+    talon -->|"label · isolate · terminate"| k8sapi["Kubernetes API"]
+    talon -->|"notifier"| esTalon[("falco-talon-*")]
+
+    es -->|"Suricata flows"| ml["ml-infer<br/>Random Forest"]
+    ml --> esMl[("security-ml-*")]
 ```
 
-Falco emits alerts via falcosidekick to a Logstash HTTP input; Suricata writes EVE JSON that Logstash also ingests. Logstash (`elk/logstash/logstash-security.conf`) merges both streams into a single Elasticsearch index `security-YYYY.MM.dd` with `tags: [falco]` or `tags: [suricata]`, so alerts from both layers can be correlated on common fields (`@timestamp`, `k8s.pod.name` / `container.id`, `dest_ip`). Suricata runs as **per-node systemd sensors on node-2 + node-3** (not as a pod); each sensor sniffs only its own node's `ens3` (AF_PACKET, VXLAN-decoded), so coverage is per-node / sensor-near-target — a single node does **not** cover the whole cluster. A separate metrics stack (Prometheus + Grafana, namespace `observability`) monitors cluster health, kept distinct from the security log pipeline.
+**Data flow.** Falco and k8saudit alerts reach Logstash through falcosidekick over HTTP. Suricata writes EVE JSON, which Filebeat ships to Logstash. Logstash processes every event in four stages: it tags the source, normalizes the fields to ECS, maps Falco rule tags to MITRE ATT&CK techniques, and auto-tags events with the attack scenario they belong to. All events go to one daily index, `security-YYYY.MM.dd`. Alerts from different tools can be correlated because they share fields:
 
-## Tech Stack
+- `kubernetes.pod.name` links Falco syscall alerts with k8saudit alerts.
+- `destination.ip` links Falco with Suricata.
+- `flow_id` links Suricata alerts with the ML verdicts.
 
-| Component | Tool | Role |
-|-----------|------|------|
-| Orchestration | MicroK8s (v1.32) | Lightweight Kubernetes distribution |
-| Runtime Security | Falco (Helm chart 8.0.2 / app 0.43.x, modern eBPF) + Falco Talon | Syscall monitoring; automated response |
-| Network IDS/IPS | Suricata (systemd, per-node sensors on node-2 + node-3) | Network traffic analysis; ET Open + custom K8s signatures |
-| Log Pipeline | falcosidekick / Suricata EVE → Logstash | Alert collection and ECS normalization |
-| Storage & Search | Elasticsearch | Unified `security-*` + `falco-talon-*` indices, querying |
-| Visualization | Kibana | Dashboards (Overview + MITRE), investigation, cross-tool correlation |
-| Metrics | Prometheus + Grafana (Helm, namespace `observability`) | Cluster health metrics (separate from the security log pipeline) |
-| Infrastructure | 4× Ubuntu 22.04 VMs | University datacenter |
+### Cluster topology
 
-## Repository Layout
+| Node | Role | Node-specific components |
+|---|---|---|
+| node-1 | Control plane | MicroK8s control plane (dqlite), API server audit log + `audit-forwarder` |
+| node-2 | Security worker | Suricata sensor (systemd), attacker pod `attack-pod`, `ml-infer` |
+| node-3 | Application worker | Suricata sensor (systemd), targets: DVWA and OWASP Juice Shop |
+| node-4 | Monitoring worker | Elasticsearch, Logstash and Kibana (systemd, outside Kubernetes) |
+
+Falco runs on every node. Suricata sensors run on the nodes that host workloads and targets, so attack traffic crosses a sensor wherever it originates. The remaining components (falcosidekick, Falco Talon, Falco k8saudit, Prometheus, Grafana) run as ordinary Kubernetes workloads.
+
+<details>
+<summary>Detailed architecture diagram (Romanian labels)</summary>
+
+![Detailed architecture diagram](docs/figures/architecture.drawio.png)
+
+More diagrams (log flow, attack → detection → response sequence, API-level detection, ML pipeline, metrics) are in [`docs/figures/`](docs/figures/). Their sources are in [`docs/diagrams/`](docs/diagrams/).
+</details>
+
+## Detection coverage
+
+Each scenario folder in [`attack-scenarios/`](attack-scenarios/) contains an `attack.sh`, which runs the attack and then queries Elasticsearch for what fired, and an `expected-detections.md`, which records the expected rules, actual results and tuning history.
+
+The numbers below are alert counts from the last full re-run (2026-07-13).
+
+| # | Scenario | MITRE | Falco | k8saudit | Suricata | Talon | ML |
+|---|---|---|:-:|:-:|:-:|:-:|:-:|
+| 01 | Container escape: privileged pod, `nsenter`, `chroot`, runtime socket | T1611 | 13 | 4 | — | — | n/a |
+| 02 | Crypto mining: renamed miner binaries, pool-port connections | T1496 | 18 | — | 3 | ✓ | partial |
+| 03 | Reverse shell: `/dev/tcp`, FIFO, `nc -e`, listeners | T1059 | 34 | — | — ¹ | ✓ | n/a |
+| 04 | Sensitive file / secret access: `/etc/shadow`, ServiceAccount token | T1552 | 6 | — | — | — | n/a |
+| 05 | Network scanning: nmap TCP connect / SYN / version scans, `nc` | T1046 | 20 | — | 8 | — | ✓ |
+| 06 | Privilege escalation: setuid bits, `su` / `sudo`, package install | T1548 | ~10 | — | — | — | n/a |
+| 07 | Data exfiltration: HTTP POST, raw TCP, DNS tunneling | T1048 | 15 | — | 10 | — | ✓ |
+| 08 | Malicious deployment: privileged pod, download + execute in `/tmp` | T1610 | 9 | 3 | — | — | n/a |
+| 09 | OWASP ZAP DAST scan against DVWA | T1190 | 8 | — | 2,938 | — | ✓ |
+| 10 | kube-hunter active Kubernetes pentest | T1046 / T1552 | 14 | — | 1 | — | minimal |
+| 11 | Lateral movement: stolen ServiceAccount token → API pivot → east-west | T1550 / T1021 | 31 | — | 3 | — | ✓ |
+
+<sub>¹ Loopback traffic never reaches a NIC, so the network layer cannot see it. "n/a" in the ML column marks a scenario with no network flows (syscall or API activity only).</sub>
+
+What the matrix shows:
+
+- **Every scenario is caught by at least one layer, and no single layer catches all of them.**
+- **The API layer closes the deploy-time gap.** Falco cannot see a pod being created, only what it does once it runs. In scenarios 01 and 08, k8saudit flags the privileged pod at admission time (`Create Privileged Pod`, `Create Sensitive Mount Pod`, `Create HostPid Pod`, …).
+- **The network layer covers Falco's gaps.** In scenario 07, Falco's DNS exfiltration rule never fires ([falco#3501](https://github.com/falcosecurity/falco/issues/3501)), but Suricata's custom rule `sid 1000012` catches the DNS tunnel. Scenario 09 is almost entirely network-visible: 2,938 Suricata alerts against 8 from Falco.
+- **The runtime layer covers what the network cannot see:** loopback reverse shells (03), file access (04) and privilege escalation (06).
+- **Response is automatic.** Talon labels and isolates the attacker pod about 3–5 seconds after the alert.
+
+## Deterministic vs ML
+
+[`ml-ids/`](ml-ids/) is an exploratory component. A Random Forest scores Suricata flows using native EVE features and writes its verdicts to the parallel index `security-ml-*`. The comparison is apples-to-apples: both detectors scored the same flows from controlled attack runs (scenarios 05, 09 and 11; 202 attack flows and 116 benign flows).
+
+| Detector | Precision | Recall | F1 |
+|---|:-:|:-:|:-:|
+| Suricata signatures | 1.000 | 0.564 | 0.722 |
+| Random Forest | 1.000 | 0.950 | 0.975 |
+| Either one (union) | — | **0.975** | — |
+
+- **The two detectors complement each other.** 41% of attack flows were caught only by the model. Signatures caught 2.5% that the model missed.
+- **Domain shift is real.** A model trained on a public dataset scores F1 0.997 on that same dataset (CIC-IDS2017) but collapses to F1 0.0001 on a different one (CIC-UNSW-NB15).
+- **Training on the cluster's own traffic fixes this.** Trained on this cluster's own Suricata flows, the model reaches F1 0.986 with 5-fold cross-validation.
+- **The absolute scores are optimistic.** Benign traffic is dominated by easily separable infrastructure traffic (VXLAN, Calico, DNS). What matters here is the *comparison* between the two detectors.
+
+Full write-ups: [`ml-ids/RESULTS.md`](ml-ids/RESULTS.md) (public datasets and domain shift) and [`ml-ids/study/REPORT.md`](ml-ids/study/REPORT.md) (deterministic vs ML study).
+
+## Kibana dashboards
+
+Five dashboards, each built by a Python script through the Kibana Saved Objects API and exported as NDJSON, ready to import:
+
+| # | Dashboard | Answers |
+|---|---|---|
+| 01 | [Overview](dashboards/01-overview/) | What is the overall security posture? |
+| 02 | [MITRE ATT&CK coverage](dashboards/02-mitre/) | Which techniques do the rules detect? |
+| 03 | [Cross-tool correlation](dashboards/03-cross-tool/) | How do Falco and Suricata complement each other? |
+| 04 | [Per-scenario investigation](dashboards/04-per-scenario/) | What did the system detect for one specific attack? |
+| 05 | [Deterministic vs ML](dashboards/05-ml-comparison/) | What does the ML layer add over signatures? |
+
+![Overview dashboard](dashboards/01-overview/screenshots/overview-2.png)
+
+<details>
+<summary>More screenshots</summary>
+
+**MITRE ATT&CK coverage**
+![MITRE dashboard](dashboards/02-mitre/screenshots/mitre-3.png)
+
+**Cross-tool correlation**
+![Cross-tool dashboard](dashboards/03-cross-tool/screenshots/cross-tool-2.png)
+
+**Per-scenario investigation (scenario 06)**
+![Per-scenario dashboard](dashboards/04-per-scenario/screenshots/per-scenario06-2.png)
+
+**Deterministic vs ML**
+![ML comparison dashboard](dashboards/05-ml-comparison/screenshots/ml-vs-deterministic-1.png)
+</details>
+
+## Repository layout
 
 ```
-k8s-threat-detection-system/
-├── CLAUDE.md                # Guidance for Claude Code / contributors
-├── README.md
-├── infrastructure/
-│   ├── ansible/             # Playbooks for VM / cluster setup
-│   └── vulnerable-apps.yaml # DVWA & other test targets
+.
+├── infrastructure/ansible/    # playbooks: 4 empty Ubuntu VMs → detection core
 ├── falco/
-│   ├── config/
-│   │   └── custom-values.yaml   # Helm values — INCLUDES the custom rules inline (customRules block); this is what's deployed
-│   └── rules/
-│       └── custom-rules.yaml    # standalone copy — STALE, not used by the deploy (reference only)
-├── falco-talon/
-│   ├── values/talon-values.yaml   # Helm values — response rules (config.rulesOverride); deployed via chart 0.4.0
-│   ├── config/config.yaml         # native config, applied as an override of the falco-talon-config secret
-│   └── README.md                  # runbook + chart-bug workarounds
-├── suricata/
-│   ├── systemd-sensors/     # per-node sensor setup (node-2 + node-3) + README
-│   └── rules/suricata-local.rules   # 3 custom K8s rules (sid 1000010-12); main detection via ET Open ruleset
-├── elk/
-│   └── logstash/logstash-security.conf   # pipeline: Falco + Suricata → unified security-* index (ECS-normalized)
-├── observability/           # Prometheus + Grafana (2 standalone Helm charts, namespace observability) — cluster metrics
-├── ml-ids/                  # exploratory: Random Forest IDS on CIC-IDS2017 / CIC-UNSW-NB15 (Cap E)
-├── dashboards/              # Kibana dashboards (.ndjson): Overview + MITRE (built via Python)
-├── attack-scenarios/
-│   ├── attack-target-setup.yaml      # the persistent `attack-pod` (namespace attack-target, pinned node-2)
-│   ├── 01-container-escape/  (attack.sh, expected-detections.md, escape-pod.yaml)
-│   ├── 02-crypto-mining/ ... 08-malicious-deployment/
-│   ├── 09-owasp-zap/         (zap-scan-job.yaml — containerized DAST)
-│   ├── 10-kube-hunter/       (kube-hunter-job.yaml — containerized pentest)
-│   └── 11-lateral-movement/  (reuses attack-pod + SA token)
+│   ├── config/                # Helm values with the custom K8S_THREAT rules (deployed source of truth)
+│   └── rules/                 # older standalone copy of the rules, reference only, not deployed
+├── falco-k8saudit/            # API / admission layer: audit policy, Helm values, audit-forwarder
+├── falco-talon/               # automated response: Helm values, response rules, config override
+├── suricata/                  # custom rules (sid 1000010–12), sensor runbook, logrotate config
+├── elk/logstash/              # pipeline: Falco + Suricata → ECS + MITRE → security-*
+├── observability/             # Prometheus + Grafana Helm values (cluster metrics)
+├── attack-scenarios/          # 11 scenarios: attack.sh + expected-detections.md each
+├── dashboards/                # 5 Kibana dashboards: build.py, exported NDJSON, screenshots
+├── ml-ids/                    # Random Forest IDS: training, live inference, comparison study
+│   ├── k8s/                   # in-cluster Deployment for live inference
+│   └── study/                 # deterministic vs ML study
 └── docs/
-    ├── diagrams/            # architecture (draw.io) + flows (Mermaid) for the thesis
-    └── baseline/            # ES baseline stats
+    ├── diagrams/              # draw.io + Mermaid sources
+    └── figures/               # rendered diagrams
 ```
 
-Each `attack-scenarios/NN-name/` folder contains `attack.sh` (executes the attack against the test pod, then queries Elasticsearch to report what each tool detected) and `expected-detections.md` (rules expected to fire, actual results, tuning iterations performed, and lessons learned — input for thesis chapter D "Crearea soluției tehnice" and chapter 6 "Limitări").
+## Reproducing the lab
 
-## Attack Scenarios
+**You need:** four Ubuntu 22.04 VMs reachable over SSH, plus a workstation with Ansible, `kubectl`, Helm and Python 3.
 
-| # | Scenario | MITRE | Falco | Suricata | Status |
-|---|----------|-------|-------|----------|--------|
-| 01 | Container escape (privileged pod: sysrq-trigger, runtime socket, nsenter, chroot, unshare) | T1611 | ✓ (13) | — | ✅ done & validated |
-| 02 | Crypto mining (renamed miner binaries + pool-port connects; no real miner) | T1496 | ✓ (17) | — | ✅ done & validated |
-| 03 | Reverse shell (`/dev/tcp`, mkfifo FIFO, `nc -e`, exec-FD, nc listeners) | T1059 | ✓ (~34) | — (loopback) | ✅ done & validated |
-| 04 | Sensitive file / secret access (`/etc/shadow`, SA token, CA cert) | T1552 | ✓ (6) | — | ✅ done & validated |
-| 05 | Network scanning (nmap TCP-connect / SYN / version scans, nc) | T1046 | ✓ | ✓ (ET SCAN sigs) | ✅ done & validated |
-| 06 | Privilege escalation (setuid bits, `su`/`sudo`, package install) | T1548 | ✓ (9) | — | ✅ done & validated |
-| 07 | Data exfiltration (curl/wget HTTP POST, raw-TCP nc, DNS tunneling) | T1048 / T1071.004 | ✓ (~11) | ✓ (DNS sid 1000012 + HTTP `.tar.gz`) | ✅ done & validated |
-| 08 | Malicious deployment (privileged pod deploy + apt / curl-download / chmod+x in /tmp / exec) | T1610 | ✓ (10) | — | ✅ done & validated |
-| 09 | OWASP ZAP DAST scan against DVWA | T1190 / T1595 | 8 (scanner pod only) | ✓ (~745 alerts, ET web sigs) | ✅ done & validated |
-| 10 | kube-hunter Kubernetes pentest (`--pod --active`) | T1046 / T1613 | ✓ (14) | ✓ (cloud-metadata IMDS, sid 1000010) | ✅ done & validated |
-| 11 | Lateral movement (SA-token theft → K8s API pivot → east-west) | T1550 / T1021 | ✓ (31) | ✓ (east-west: mySQL 3306, curl UA) | ✅ done & validated |
-
-Notes:
-- **Deployment-time blind spot:** scenario 1 (privileged pod) and scenario 8 (malicious workload) are *not* detected by Falco at deployment time — Falco sees the **consequences** of running a malicious container, not the act of creating it. Deployment-time prevention needs admission control (PSA / Kyverno) — analyzed in `docs/admission-control-recommendation.md` (thesis Cap 6).
-- **Suricata coverage depends on sensor placement:** the attacker pod is pinned to **node-2** (which has a sensor and is *not* a target), so its outbound traffic and its inter-node traffic to DVWA (node-3, also a sensor) are captured (sensor-near-target). Scenario 3 (reverse shell) stays Falco-only — loopback traffic doesn't traverse a NIC. Scenario 7 (data exfiltration): Suricata detects DNS tunneling (custom rule `sid 1000012`) and cleartext-HTTP archive exfil (`ET WEB_SERVER ... *.tar.gz in POST body`); only **TLS-encrypted** exfil evades the NIDS (covered by Falco at the tool level).
-- **Falco UDP enrichment caveat:** the custom `DNS Exfiltration Suspicion` Falco rule currently doesn't fire (a modern-eBPF `fd.*` enrichment edge case on UDP network events, [falco#3501](https://github.com/falcosecurity/falco/issues/3501)); DNS tunneling is detected at the NIDS layer instead (Suricata `sid 1000012`).
-
-## Status
-
-**Done**
-- [x] 4-VM MicroK8s cluster (node-1 control plane / node-2 + node-3 workers with Suricata sensors / node-4 ELK)
-- [x] ELK pipeline end-to-end (Falco via falcosidekick + Suricata EVE → Logstash → Elasticsearch → Kibana, unified `security-*` index, ECS-normalized)
-- [x] Falco deployed (Helm, modern eBPF) with the full set of custom `K8S_THREAT:` rules (currently **helm revision 30**, incl. FIM scoped rules)
-- [x] Falco container/k8s metadata enrichment fixed (`collectors.containerEngine` + MicroK8s containerd socket)
-- [x] Suricata deployed — **per-node systemd sensors on node-2 + node-3** (sensor-near-target), ET Open + 3 custom K8s rules
-- [x] **All 11 attack scenarios** fully implemented and validated end-to-end (`attack-scenarios/01..11/`), full re-run 2026-06
-- [x] **Falco Talon automated response** deployed & validated (Helm chart 0.4.0; reverse-shell → isolate/label, crypto → terminate; ES notifier → `falco-talon-*` index)
-- [x] **Prometheus + Grafana** observability stack (2 standalone Helm charts, namespace `observability`) for cluster metrics
-- [x] Kibana dashboards — Overview + MITRE (`dashboards/`, built via Python)
-
-**In progress / pending**
-- [ ] Additional Kibana dashboards + dedicated cross-tool correlation saved views (data already unified in `security-*`)
-- [ ] Falco/Suricata FP tuning candidates (FIM `ld.so.cache` on package installs; Falco Talon self-detection — see scenario docs)
-- [ ] Exploratory ML/IDS component (`ml-ids/` — Random Forest on CIC-IDS2017 / CIC-UNSW-NB15; cross-dataset domain shift)
-
-**Future directions (mentioned in the conclusions chapter):** admission control as a prevention layer (PSA / Kyverno — see `docs/admission-control-recommendation.md`), AI/ML-assisted detection (anomaly detection, FP reduction), Zero Trust, cluster-wide NIDS coverage (Suricata DaemonSet).
-
-## Setup (first-time)
-
-Cluster endpoints (Kibana, Elasticsearch) and Kibana data view IDs are read from `.env` at repo root — gitignored to keep internal IPs and identifiers out of public history.
+**1. Deploy the detection core with Ansible.** This builds the MicroK8s cluster and installs Falco with the custom rules, Falco Talon, the Suricata sensors on node-2 and node-3, ELK on node-4, and the vulnerable target apps.
 
 ```bash
-cp .env.example .env
-# Edit .env with your actual cluster endpoints and data view UUIDs
+cd infrastructure/ansible
+cp inventories/hosts.ini.example inventories/hosts.ini   # node IPs
+cp group_vars/all.yml.example group_vars/all.yml         # CIDRs, MetalLB range, versions
+ansible-playbook -i inventories/hosts.ini playbooks/site.yml
 ```
 
-Required variables (see `.env.example` for the full list with comments):
-- `KIBANA_URL` — used by `dashboards/*/build.py`
-- `ES_URL` — used by `attack-scenarios/*/attack.sh`
-- `KIBANA_DATA_VIEW_ID`, `KIBANA_DATA_VIEW_ECS_ID` — UUIDs of the two data views the dashboards reference
+**2. Configure the endpoints.** Both files are gitignored.
 
-The loaders are at `dashboards/_config.py` (Python) and `attack-scenarios/_env.sh` (bash). Both error out with clear instructions if `.env` is missing or has placeholder values.
+```bash
+cp .env.example .env                                                       # KIBANA_URL, ES_URL, data view IDs
+cp falco/config/local-values.yaml.example falco/config/local-values.yaml   # Logstash webhook endpoint
+```
 
-## Working with this repo
+**3. Add the remaining layers.** Each one has its own runbook:
 
-`kubectl`/`helm` are run from the laptop with a pre-configured kubeconfig. The cluster's internal `10.11.0.x` IPs are not routable from the laptop — reach Elasticsearch/Kibana via the node-4 floating IP (set in `.env`). After editing `falco/config/custom-values.yaml`, `helm upgrade falco falcosecurity/falco -n falco --version 8.0.2 -f custom-values.yaml -f local-values.yaml` (the gitignored `local-values.yaml` holds the deployment-specific Logstash endpoint) and wait for the DaemonSet rollout (slow — ~5-15 min; the eBPF driver is rebuilt per pod on this disk). Custom Falco rules live in the `customRules:` block of `custom-values.yaml`, **not** in `falco/rules/custom-rules.yaml` (that copy is stale). See `CLAUDE.md` for the full command set and gotchas.
+- API / admission detection: [`falco-k8saudit/README.md`](falco-k8saudit/README.md)
+- ML inference: [`ml-ids/README.md`](ml-ids/README.md). The trained model is not committed. Regenerate it from the included dataset with `python train_cluster_rf.py`.
+- Cluster metrics: [`observability/`](observability/) (`prometheus-community/prometheus` and `grafana/grafana` charts)
+- Kibana dashboards: [`dashboards/README.md`](dashboards/README.md)
+
+**4. Run the attack scenarios.**
+
+```bash
+kubectl apply -f attack-scenarios/attack-target-setup.yaml
+cd attack-scenarios/04-sensitive-file && ./attack.sh
+```
+
+Read [`attack-scenarios/README.md`](attack-scenarios/README.md) first. It covers the tools to install in `attack-pod`, the recommended run order, and the Talon cleanup required after scenarios 02 and 03, which leave the attacker pod isolated.
+
+## Known limitations
+
+- **Falco UDP enrichment.** With the modern eBPF driver, rules that depend on UDP socket details (`DNS Exfiltration Suspicion`, `Crypto Mining Pool Connection`) do not fire ([falco#3501](https://github.com/falcosecurity/falco/issues/3501)). Suricata covers DNS exfiltration instead.
+- **Network sensor visibility.** Suricata only sees traffic that crosses the NIC of a node with a sensor. Same-node pod-to-pod traffic, loopback and TLS-encrypted payloads are invisible to it. Calico SNAT on egress also hides which pod originated outbound traffic.
+- **Known false positive.** The file-integrity rule fires when `ldconfig` writes `/etc/ld.so.cache~` during package installs (scenarios 06 and 08).
+- **Falco Talon chart 0.4.0 bugs.** Two template bugs make it impossible to configure Talon through Helm values alone, so the native config is applied as a secret override. See [`falco-talon/README.md`](falco-talon/README.md).
+- **Lab-grade topology.** There is a single control-plane node (no HA), and ELK runs as systemd services outside the cluster.
+
+## Security notice
+
+> [!WARNING]
+> This is a lab project. It deploys intentionally vulnerable applications (DVWA, OWASP Juice Shop), privileged pods and real attack tooling (nmap, OWASP ZAP, kube-hunter). The ELK stack runs **without authentication or TLS** (`xpack.security.enabled: false`). Run it only in an isolated environment you own, never on shared or production infrastructure.
+
+## Documentation language
+
+This README is in English. The per-component documentation (runbooks, `expected-detections.md` files, ML results) is written in Romanian.
 
 ## License
 
-(unspecified)
+[MIT](LICENSE) © 2026 Tatar Ioan Dan

@@ -59,6 +59,6 @@ Indexul `security-ml-*` rămâne (read-only pe `security-*`; nimic distructiv).
   senzorul local). node-2 are cel mai mult headroom in steady-state (attack-pod idle) si lasa
   aplicatiile-tinta de pe node-3 (DVWA/Juice Shop) neimpactate. NU node-1 (dqlite), NU node-4 (ELK).
 - **Modelul copt în imagine** (2.2MB): ConfigMap e limitat la 1MB → nu se poate monta așa.
-- **`imagePullPolicy: IfNotPresent`**: imagine sideload-ată, nu dintr-un registry (clusterul n-are unul;
-  addon-ul `registry` evitat - hammer pe dqlite, vezi observability în CLAUDE.md).
+- **`imagePullPolicy: Never`**: imagine sideload-ată, nu dintr-un registry (clusterul n-are unul;
+  addon-ul `registry` evitat - hammer pe dqlite-ul de pe node-1, deja bottleneck).
 - **Resurse**: inferența RF e ieftină; limita 512Mi acoperă RSS-ul pandas+sklearn (~300-400MB).

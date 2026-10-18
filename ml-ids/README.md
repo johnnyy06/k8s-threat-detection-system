@@ -53,7 +53,9 @@ build/rollback: **`k8s/README.md`**.
 ## Fișiere
 - `infer_live.py`, `security-ml-template.json` (mapping ES) — inferența live
 - `Dockerfile`, `requirements-infer.txt`, `k8s/` — împachetare Deployment
-- `models/` (gitignored `*.joblib`), `reports/` (PNG), `cluster_flows.csv` (gitignored), `RESULTS.md`, `DATASETS.md`
+- `cluster_flows.csv` (dataset-ul etichetat din cluster, comis în repo), `reports/` (PNG), `RESULTS.md`, `DATASETS.md`
+- `models/` (gitignored `*.joblib`) — `rf_cluster.joblib` se regenerează din `cluster_flows.csv` cu
+  `python train_cluster_rf.py`; e necesar înainte de `docker build` (Dockerfile-ul îl copiază în imagine).
 
 ## Decizii de scope (importante)
 - **NU Elastic ML** (licență ES Basic, `ml.available:false`) → extern, Python/sklearn.

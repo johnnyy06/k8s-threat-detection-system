@@ -4,7 +4,7 @@
 # pentru fiecare: IP-ul atacatorului + fereastra de timp. Scrie runs.json (consumat de study_det_vs_ml.py).
 # Apples-to-apples: ambii detectori pe ACELEASI flow-uri. Falco (host) = complementar, NU in comparatie.
 # Ruleaza in fundal (~20 min). Anti-leakage: rulari NOI (flow_id-uri noi, nu in cluster_flows.csv de antrenare).
-export KUBECONFIG=/home/tionu/Proiect_licenta/microk8s-licenta
+# export KUBECONFIG=...         # decomment this line and complete with your kubeconfig location
 HERE="$(cd "$(dirname "$0")" && pwd)"
 AS="$HERE/../../attack-scenarios"
 OUT="$HERE/runs.json"

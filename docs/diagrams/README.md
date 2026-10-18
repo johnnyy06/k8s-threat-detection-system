@@ -34,5 +34,5 @@ Surse versionate pentru lucrările grafice (Cap B/C — arhitectură, fluxuri, i
 - **Arhitectura completă** + **interconectarea IDS/Falco/ELK** → draw.io (layout fin, icoane).
 - **Fluxurile de alertare/colectare** → Mermaid (pipeline ușor de iterat ca text).
 
-Datele de arhitectură (topologie, porturi, plasare senzori) sunt în `CLAUDE.md` și
-`suricata/README.md` / `falco-talon/README.md` — sursa de adevăr pentru diagrame.
+Datele de arhitectură (topologie, porturi, plasare senzori) sunt în `README.md` (rădăcina repo-ului) și
+`suricata/README.md` / `falco-talon/README.md` / `falco-k8saudit/README.md` — sursa de adevăr pentru diagrame.
